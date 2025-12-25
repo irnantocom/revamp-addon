@@ -1,0 +1,344 @@
+{
+  "meta": {
+    "project_name": "AI Page Revamp Extension",
+    "type": "chrome_extension",
+    "manifest_version": 3,
+    "primary_goal": "Visually transform a target website to match a reference design using AI-assisted DOM editing and export the result as a reusable static template.",
+    "target_users": ["web agency", "frontend developer", "UI/UX designer"],
+    "development_mode": "modular_and_scalable"
+  },
+
+  "core_problem_statement": {
+    "description": "Clients want to revamp their website using a reference site design while keeping their own content. Manual rebuild is time-consuming. This extension allows visual mapping, AI-assisted transformation, real-time DOM editing, and exportable results."
+  },
+
+  "supported_ai_providers": [
+    {
+        "name": "OpenAI",
+        "models": [
+        "gpt-4.1",
+        "gpt-4o",
+        "gpt-4.1-mini"
+        ],
+        "auth": "api_key",
+        "request_location": "background_service_worker",
+        "capabilities": ["reasoning", "code_generation", "ui_text", "css_generation"],
+        "streaming": true
+    },
+    {
+        "name": "Google Gemini",
+        "models": [
+        "gemini-1.5-pro",
+        "gemini-1.5-flash"
+        ],
+        "auth": "api_key",
+        "request_location": "background_service_worker",
+        "capabilities": [
+        "long_context",
+        "multimodal",
+        "layout_analysis",
+        "content_rewrite"
+        ],
+        "notes": "Good for analyzing large HTML documents and design consistency"
+    },
+    {
+        "name": "Anthropic Claude",
+        "models": [
+        "claude-3.5-sonnet",
+        "claude-3-opus"
+        ],
+        "auth": "api_key",
+        "request_location": "background_service_worker",
+        "capabilities": [
+        "deep_reasoning",
+        "refactor_code",
+        "design_explanation",
+        "safe_generation"
+        ],
+        "notes": "Excellent for complex DOM transformation logic and clean code generation"
+    },
+    {
+        "name": "Perplexity",
+        "models": [
+        "sonar",
+        "sonar-pro"
+        ],
+        "auth": "api_key",
+        "request_location": "background_service_worker",
+        "requires_proxy": true,
+        "capabilities": [
+        "search_augmented_generation",
+        "design_research",
+        "best_practice_suggestions"
+        ]
+    },
+    {
+        "name": "Mistral",
+        "models": [
+        "mistral-large",
+        "codestral"
+        ],
+        "auth": "api_key",
+        "request_location": "background_service_worker",
+        "capabilities": [
+        "fast_generation",
+        "code_completion",
+        "lightweight_tasks"
+        ],
+        "notes": "Good balance of speed and cost"
+    },
+    {
+        "name": "Cohere",
+        "models": [
+        "command-r-plus",
+        "command-r"
+        ],
+        "auth": "api_key",
+        "request_location": "background_service_worker",
+        "capabilities": [
+        "text_classification",
+        "semantic_matching",
+        "element_similarity"
+        ],
+        "notes": "Useful for matching reference elements to target elements"
+    },
+    {
+        "name": "Groq",
+        "models": [
+        "llama-3.1-70b",
+        "llama-3.1-8b"
+        ],
+        "auth": "api_key",
+        "request_location": "background_service_worker",
+        "capabilities": [
+        "ultra_fast_inference",
+        "real_time_chat",
+        "low_latency_preview"
+        ],
+        "notes": "Ideal for instant preview and rapid iteration"
+    },
+    {
+        "name": "OpenRouter",
+        "models": [
+        "openai/gpt-4o",
+        "anthropic/claude-3.5-sonnet",
+        "google/gemini-1.5-pro",
+        "mistral/mistral-large"
+        ],
+        "auth": "api_key",
+        "request_location": "background_service_worker",
+        "capabilities": [
+        "multi_provider_fallback",
+        "cost_optimization",
+        "model_routing"
+        ],
+        "notes": "Recommended abstraction layer for switching models dynamically"
+    }
+  ],
+  
+  "ai_routing_strategy": {
+    "mode": "task_based",
+    "fallback": true,
+    "cost_limit_per_session": true
+  },
+
+  "extension_architecture": {
+    "layers": [
+      "popup_ui",
+      "content_script",
+      "background_service_worker",
+      "ai_adapter_layer",
+      "export_engine",
+      "inspector_engine"
+    ]
+  },
+
+  "permissions": {
+    "chrome_permissions": [
+      "activeTab",
+      "scripting",
+      "storage",
+      "tabs",
+      "downloads"
+    ],
+    "host_permissions": ["<all_urls>"]
+  },
+
+  "ui_components": {
+    "framework": "React",
+    "styling": "TailwindCSS",
+    "render_strategy": "ShadowDOM_isolated",
+    "main_panels": [
+      "SidebarEditor",
+      "ChatBoxAI",
+      "InspectorOverlay",
+      "HistoryUndoPanel",
+      "ExportModal"
+    ]
+  },
+
+  "inspector_engine": {
+    "modes": [
+      "hover_highlight",
+      "click_select",
+      "reference_target_pairing"
+    ],
+    "selector_generation": {
+      "priority": [
+        "data-attributes",
+        "unique_id",
+        "css_path",
+        "xpath"
+      ]
+    },
+    "features": [
+      "visual_highlight_box",
+      "element_breadcrumb",
+      "auto_selector_validation",
+      "fallback_selector_chain"
+    ]
+  },
+
+  "visual_editor": {
+    "editing_capabilities": [
+      "inline_text_edit",
+      "replace_image_src",
+      "replace_video_src",
+      "edit_attributes",
+      "toggle_visibility",
+      "apply_css_rules"
+    ],
+    "wysiwyg_behavior": {
+      "contenteditable": true,
+      "non_destructive": true,
+      "undo_stack": true
+    }
+  },
+
+  "ai_chatbox": {
+    "input_modes": [
+      "free_text_command",
+      "element_scoped_command"
+    ],
+    "supported_intents": [
+      "rewrite_text",
+      "match_reference_style",
+      "generate_css",
+      "suggest_layout_change",
+      "extract_design_tokens"
+    ],
+    "response_handling": {
+      "preview_before_apply": true,
+      "apply_with_confirmation": true
+    }
+  },
+
+  "mapping_engine": {
+    "purpose": "Map reference site elements to target site elements for automated transformation",
+    "mapping_format": "json_rules",
+    "persist_mappings": true,
+    "rule_schema": {
+      "id": "string",
+      "reference_selector": "string",
+      "target_selector": "string",
+      "action": "replaceText | replaceHTML | replaceSrc | applyCSS",
+      "params": "object"
+    }
+  },
+
+  "real_time_application": {
+    "apply_strategy": [
+      "direct_dom_mutation",
+      "css_injection",
+      "mutation_observer_reapply"
+    ],
+    "spa_support": {
+      "detect_route_change": true,
+      "auto_reapply_on_rerender": true
+    }
+  },
+
+  "export_engine": {
+    "output_format": "zip",
+    "included_files": [
+      "index.html",
+      "styles.css",
+      "scripts.js",
+      "assets/"
+    ],
+    "features": [
+      "clone_dom_tree",
+      "collect_stylesheets",
+      "inline_optional_computed_styles",
+      "download_external_assets",
+      "rewrite_asset_paths"
+    ],
+    "libraries": ["JSZip"],
+    "export_modes": [
+      "full_page",
+      "selected_section",
+      "diff_only"
+    ]
+  },
+
+  "copy_tools": {
+    "allow_copy": [
+      "html",
+      "css",
+      "javascript"
+    ],
+    "scope": [
+      "selected_element",
+      "full_document"
+    ]
+  },
+
+  "storage_strategy": {
+    "workspace_storage": "chrome.storage.local",
+    "sync_preferences": "chrome.storage.sync",
+    "entities": [
+      "api_keys",
+      "element_mappings",
+      "undo_snapshots",
+      "export_history"
+    ]
+  },
+
+  "security_constraints": {
+    "no_inline_eval": true,
+    "api_key_encryption": true,
+    "background_only_ai_calls": true
+  },
+
+  "developer_experience": {
+    "code_style": "typed_and_modular",
+    "language": "TypeScript",
+    "build_tool": "Vite",
+    "folder_structure": [
+      "src/background",
+      "src/content",
+      "src/popup",
+      "src/shared",
+      "src/exporter",
+      "src/ai"
+    ]
+  },
+
+  "edge_cases": [
+    "single_page_application_dom_overwrite",
+    "shadow_dom_elements",
+    "iframe_cross_origin_limitations",
+    "strict_csp_pages"
+  ],
+
+  "legal_notice": {
+    "warning": "User is responsible for ensuring they have legal rights to reuse or replicate reference site designs."
+  },
+
+  "success_criteria": [
+    "User can visually select elements",
+    "User can apply AI-driven transformations",
+    "Changes appear instantly in browser",
+    "Exported zip opens offline with same visual result"
+  ]
+}
