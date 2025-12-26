@@ -20,6 +20,7 @@ interface Props {
 const ElementEditor: React.FC<Props> = ({ element, onClear }) => {
   const [textValue, setTextValue] = useState('');
   const [selectedAttribute, setSelectedAttribute] = useState('');
+  const [customAttributeName, setCustomAttributeName] = useState('');
   const [attributeValue, setAttributeValue] = useState('');
 
   useEffect(() => {
@@ -53,6 +54,14 @@ const ElementEditor: React.FC<Props> = ({ element, onClear }) => {
   const handleAttributeEdit = async () => {
     if (!element || !selectedAttribute) return;
 
+    // Determine actual attribute name
+    const attrName = selectedAttribute === 'custom' ? customAttributeName : selectedAttribute;
+    
+    if (!attrName || !attributeValue) {
+      alert('Please provide both attribute name and value');
+      return;
+    }
+
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab.id) return;
@@ -61,12 +70,17 @@ const ElementEditor: React.FC<Props> = ({ element, onClear }) => {
         type: 'EDIT_ATTRIBUTE',
         payload: {
           selector: element.selector,
-          attribute: selectedAttribute,
+          attribute: attrName,
           value: attributeValue,
         },
       });
 
       alert('Attribute updated successfully!');
+      
+      // Reset custom attribute name after successful update
+      if (selectedAttribute === 'custom') {
+        setCustomAttributeName('');
+      }
     } catch (error) {
       console.error('[Popup] Failed to edit attribute:', error);
       alert('Failed to update attribute');
@@ -172,8 +186,9 @@ const ElementEditor: React.FC<Props> = ({ element, onClear }) => {
               {selectedAttribute === 'custom' && (
                 <input
                   type="text"
+                  value={customAttributeName}
                   placeholder="Attribute name (e.g., 'src', 'href')"
-                  onChange={(e) => setSelectedAttribute(e.target.value)}
+                  onChange={(e) => setCustomAttributeName(e.target.value)}
                   className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
               )}

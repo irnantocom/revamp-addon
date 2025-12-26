@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import Inspector from './components/Inspector';
 import ElementEditor from './components/ElementEditor';
 import ExportPanel from './components/ExportPanel';
+import AIChatBox from './components/AIChatBox';
+import Settings from './components/Settings';
 
-type Tab = 'inspector' | 'editor' | 'export';
+type Tab = 'inspector' | 'editor' | 'ai' | 'export' | 'settings';
 
 interface InspectedElement {
   selector: {
@@ -26,7 +28,8 @@ const App: React.FC = () => {
     const handleMessage = (message: any) => {
       if (message.type === 'ELEMENT_SELECTED') {
         setSelectedElement(message.payload);
-        setActiveTab('editor');
+        // Don't force tab switch - stay on current tab
+        // User can manually switch to Editor if needed
       }
     };
 
@@ -46,10 +49,10 @@ const App: React.FC = () => {
       </header>
 
       {/* Tabs */}
-      <nav className="flex border-b border-gray-200 bg-white">
+      <nav className="flex border-b border-gray-200 bg-white overflow-x-auto">
         <button
           onClick={() => setActiveTab('inspector')}
-          className={`flex-1 py-3 text-sm font-medium ${
+          className={`flex-1 py-3 px-2 text-xs font-medium whitespace-nowrap ${
             activeTab === 'inspector'
               ? 'border-b-2 border-blue-600 text-blue-600'
               : 'text-gray-600 hover:text-gray-900'
@@ -59,7 +62,7 @@ const App: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('editor')}
-          className={`flex-1 py-3 text-sm font-medium ${
+          className={`flex-1 py-3 px-2 text-xs font-medium whitespace-nowrap ${
             activeTab === 'editor'
               ? 'border-b-2 border-blue-600 text-blue-600'
               : 'text-gray-600 hover:text-gray-900'
@@ -69,14 +72,34 @@ const App: React.FC = () => {
           Editor
         </button>
         <button
+          onClick={() => setActiveTab('ai')}
+          className={`flex-1 py-3 px-2 text-xs font-medium whitespace-nowrap ${
+            activeTab === 'ai'
+              ? 'border-b-2 border-blue-600 text-blue-600'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          AI Chat
+        </button>
+        <button
           onClick={() => setActiveTab('export')}
-          className={`flex-1 py-3 text-sm font-medium ${
+          className={`flex-1 py-3 px-2 text-xs font-medium whitespace-nowrap ${
             activeTab === 'export'
               ? 'border-b-2 border-blue-600 text-blue-600'
               : 'text-gray-600 hover:text-gray-900'
           }`}
         >
           Export
+        </button>
+        <button
+          onClick={() => setActiveTab('settings')}
+          className={`flex-1 py-3 px-2 text-xs font-medium whitespace-nowrap ${
+            activeTab === 'settings'
+              ? 'border-b-2 border-blue-600 text-blue-600'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          Settings
         </button>
       </nav>
 
@@ -89,12 +112,14 @@ const App: React.FC = () => {
             onClear={() => setSelectedElement(null)}
           />
         )}
+        {activeTab === 'ai' && <AIChatBox selectedElement={selectedElement} />}
         {activeTab === 'export' && <ExportPanel />}
+        {activeTab === 'settings' && <Settings />}
       </main>
 
       {/* Footer */}
       <footer className="bg-white border-t border-gray-200 px-4 py-2 text-xs text-gray-500 text-center">
-        Phase 1 MVP • v1.0.0
+        Phase 2: AI Integration • v1.0.0
       </footer>
     </div>
   );

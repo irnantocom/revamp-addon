@@ -3,6 +3,11 @@
  * Handles extension lifecycle, messaging, and AI requests routing
  */
 
+import { OpenAIProvider } from '../ai/openai-provider';
+import { ClaudeProvider } from '../ai/claude-provider';
+import { GeminiProvider } from '../ai/gemini-provider';
+import type { AIRequest } from '../ai/provider-interface';
+
 interface Message {
   type: string;
   payload?: any;
@@ -13,6 +18,31 @@ interface MessageResponse {
   data?: any;
   error?: string;
 }
+
+// Handle extension icon click to toggle floating panel
+chrome.action.onClicked.addListener(async (tab) => {
+  if (!tab.id) return;
+  
+  try {
+    // Send message to content script to toggle panel
+    await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_PANEL' });
+  } catch (error) {
+    console.error('[Background] Failed to toggle panel:', error);
+    // If content script not loaded, inject it
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['content/content-script.js'],
+      });
+      // Wait and try again
+      setTimeout(async () => {
+        await chrome.tabs.sendMessage(tab.id!, { type: 'TOGGLE_PANEL' });
+      }, 500);
+    } catch (injectError) {
+      console.error('[Background] Failed to inject content script:', injectError);
+    }
+  }
+});
 
 // Extension installation/update handler
 chrome.runtime.onInstalled.addListener((details) => {
@@ -93,16 +123,66 @@ async function handleUpdateSettings(
 
 // Handle AI requests (to be expanded in Phase 2)
 async function handleAIRequest(
-  payload: any,
+  payload: AIRequest,
   sendResponse: (response: MessageResponse) => void
 ) {
   try {
-    // Placeholder for AI provider integration
-    // This will be implemented in Phase 2
-    sendResponse({
-      success: false,
-      error: 'AI requests not yet implemented (Phase 2)',
-    });
+    // Get API keys from storage
+    const result = await chrome.storage.local.get('settings');
+    const apiKeys = result.settings?.apiKeys || {};
+
+    // Check if API key exists for the provider
+    const apiKey = apiKeys[payload.provider];
+    if (!apiKey) {
+      sendResponse({
+        success: false,
+        error: `No API key configured for ${payload.provider}. Please add it in Settings.`,
+      });
+      return;
+    }
+
+    // Initialize provider
+    let provider;
+    switch (payload.provider) {
+      case 'openai':
+        provider = new OpenAIProvider({ apiKey });
+        break;
+      case 'claude':
+        provider = new ClaudeProvider({ apiKey });
+        break;
+      case 'gemini':
+        provider = new GeminiProvider({ apiKey });
+        break;
+      default:
+        sendResponse({
+          success: false,
+          error: `Provider ${payload.provider} not yet implemented`,
+        });
+        return;
+    }
+
+    // Make AI request
+    const response = await provider.generateCompletion(
+      payload.messages,
+      payload.model,
+      {
+        temperature: payload.temperature,
+        maxTokens: payload.maxTokens,
+        stream: payload.stream,
+      }
+    );
+
+    if (response.success) {
+      sendResponse({
+        success: true,
+        data: response,
+      });
+    } else {
+      sendResponse({
+        success: false,
+        error: response.error,
+      });
+    }
   } catch (error) {
     sendResponse({ success: false, error: String(error) });
   }

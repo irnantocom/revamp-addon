@@ -13,6 +13,12 @@ npm run build
 cp public/manifest.json dist/
 cp -r public/icons dist/ 2>/dev/null || echo "Note: Add icon files to public/icons/"
 
+# Move popup HTML to correct location
+if [ -f dist/src/popup/index.html ]; then
+  mv dist/src/popup/index.html dist/popup/index.html
+  rm -rf dist/src
+fi
+
 echo "Build complete! Extension is ready in ./dist"
 echo ""
 echo "To load the extension:"
