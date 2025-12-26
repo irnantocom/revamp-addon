@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 // Helper to ensure content script is ready
 const ensureContentScript = async (tabId: number): Promise<boolean> => {
@@ -23,6 +23,21 @@ const ensureContentScript = async (tabId: number): Promise<boolean> => {
 
 const Inspector: React.FC = () => {
   const [isInspecting, setIsInspecting] = useState(false);
+
+  // Listen for inspector state changes from content script
+  useEffect(() => {
+    const handleMessage = (message: any) => {
+      if (message.type === 'INSPECTOR_STATE_CHANGED') {
+        setIsInspecting(message.isActive);
+      }
+    };
+
+    chrome.runtime.onMessage.addListener(handleMessage);
+    
+    return () => {
+      chrome.runtime.onMessage.removeListener(handleMessage);
+    };
+  }, []);
 
   const startInspector = async () => {
     try {

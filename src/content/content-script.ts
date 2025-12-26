@@ -156,6 +156,14 @@ class RevampInspector {
     document.addEventListener('mouseout', this.handleMouseOut, true);
     document.addEventListener('click', this.handleClick, true);
 
+    // Notify popup of state change
+    chrome.runtime.sendMessage({
+      type: 'INSPECTOR_STATE_CHANGED',
+      isActive: true,
+    }).catch(() => {
+      // Popup might be closed, that's okay
+    });
+
     console.log('[Revamp] Inspector started');
   }
 
@@ -171,6 +179,14 @@ class RevampInspector {
     document.removeEventListener('mouseout', this.handleMouseOut, true);
     document.removeEventListener('click', this.handleClick, true);
     this.overlay.hide();
+
+    // Notify popup of state change
+    chrome.runtime.sendMessage({
+      type: 'INSPECTOR_STATE_CHANGED',
+      isActive: false,
+    }).catch(() => {
+      // Popup might be closed, that's okay
+    });
 
     console.log('[Revamp] Inspector stopped');
   }
@@ -237,16 +253,20 @@ class RevampInspector {
       align-items: center;
       justify-content: center;
       border-radius: 4px;
+      z-index: 10;
     `;
-    closeBtn.onmouseover = () => {
+    closeBtn.addEventListener('mouseover', () => {
       closeBtn.style.background = '#fee2e2';
       closeBtn.style.color = '#dc2626';
-    };
-    closeBtn.onmouseout = () => {
+    });
+    closeBtn.addEventListener('mouseout', () => {
       closeBtn.style.background = 'transparent';
       closeBtn.style.color = '#6b7280';
-    };
-    closeBtn.onclick = () => this.togglePanel();
+    });
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.togglePanel();
+    });
 
     dragHandle.appendChild(closeBtn);
 
@@ -280,19 +300,21 @@ class RevampInspector {
   private makeDraggable(element: HTMLElement, handle: HTMLElement): void {
     let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
 
-    handle.onmousedown = dragMouseDown;
-
-    function dragMouseDown(e: MouseEvent) {
+    const dragMouseDown = (e: MouseEvent) => {
+      // Only drag from handle, not from close button
+      if ((e.target as HTMLElement).tagName === 'BUTTON') return;
+      
       e.preventDefault();
       e.stopPropagation();
       pos3 = e.clientX;
       pos4 = e.clientY;
-      document.onmouseup = closeDragElement;
-      document.onmousemove = elementDrag;
-    }
+      document.addEventListener('mouseup', closeDragElement, true);
+      document.addEventListener('mousemove', elementDrag, true);
+    };
 
-    function elementDrag(e: MouseEvent) {
+    const elementDrag = (e: MouseEvent) => {
       e.preventDefault();
+      e.stopPropagation();
       pos1 = pos3 - e.clientX;
       pos2 = pos4 - e.clientY;
       pos3 = e.clientX;
@@ -300,12 +322,14 @@ class RevampInspector {
       element.style.top = (element.offsetTop - pos2) + 'px';
       element.style.left = (element.offsetLeft - pos1) + 'px';
       element.style.right = 'auto';
-    }
+    };
 
-    function closeDragElement() {
-      document.onmouseup = null;
-      document.onmousemove = null;
-    }
+    const closeDragElement = () => {
+      document.removeEventListener('mouseup', closeDragElement, true);
+      document.removeEventListener('mousemove', elementDrag, true);
+    };
+
+    handle.addEventListener('mousedown', dragMouseDown, true);
   }
 
   /**

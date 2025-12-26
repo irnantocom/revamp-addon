@@ -173,12 +173,16 @@ const ElementEditor: React.FC<Props> = ({ element, onClear }) => {
             className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
             <option value="">Select an attribute...</option>
-            {Object.keys(element.attributes).map((attr) => (
-              <option key={attr} value={attr}>
-                {attr}
-              </option>
-            ))}
-            <option value="custom">+ Add custom attribute</option>
+            <optgroup label="Edit Existing Attributes">
+              {Object.keys(element.attributes).map((attr) => (
+                <option key={attr} value={attr}>
+                  {attr} = "{element.attributes[attr]}"
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Add New Attribute">
+              <option value="custom">+ Add custom attribute</option>
+            </optgroup>
           </select>
 
           {selectedAttribute && (
@@ -203,7 +207,7 @@ const ElementEditor: React.FC<Props> = ({ element, onClear }) => {
                 onClick={handleAttributeEdit}
                 className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg text-sm transition-colors"
               >
-                Update Attribute
+                {selectedAttribute === 'custom' ? 'Add Attribute' : 'Update Attribute'}
               </button>
             </>
           )}
