@@ -33,22 +33,13 @@ export default defineConfig({
   ],
   build: {
     outDir: 'dist',
+    emptyOutDir: false,
     rollupOptions: {
       input: {
         popup: resolve(__dirname, 'src/popup/index.html'),
-        background: resolve(__dirname, 'src/background/service-worker.ts'),
-        content: resolve(__dirname, 'src/content/content-script.ts'),
       },
       output: {
-        entryFileNames: (chunkInfo) => {
-          if (chunkInfo.name === 'background') {
-            return 'background/service-worker.js';
-          }
-          if (chunkInfo.name === 'content') {
-            return 'content/content-script.js';
-          }
-          return '[name]/[name].js';
-        },
+        entryFileNames: '[name]/[name].js',
         chunkFileNames: 'chunks/[name]-[hash].js',
         assetFileNames: (assetInfo) => {
           const name = assetInfo.name || '';

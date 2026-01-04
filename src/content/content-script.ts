@@ -5,6 +5,9 @@
 
 import { SelectorGenerator, SelectorInfo } from '../utils/selector-generator';
 import { HighlightOverlay } from '../utils/highlight-overlay';
+import { AIResponseParser } from '../utils/ai-response-parser';
+import { changeManager } from '../utils/change-manager';
+import { AIRevampResponse, AIChange } from '../types/ai-response';
 
 interface InspectedElement {
   selector: SelectorInfo;
@@ -23,10 +26,16 @@ interface EditOperation {
 }
 
 interface ApplyChangePayload {
-  action: 'text' | 'css' | 'html' | 'attribute';
+  action: 'text' | 'css' | 'html' | 'attribute' | 'script';
   selector: SelectorInfo;
   value: any;
   attribute?: string;
+}
+
+interface ApplyRevampPayload {
+  rawResponse?: string;
+  parsedResponse?: AIRevampResponse;
+  changes?: AIChange[];
 }
 
 class RevampInspector {
@@ -117,6 +126,29 @@ class RevampInspector {
         case 'APPLY_AI_CHANGE':
           const result = this.applyAIChange(message.payload);
           sendResponse(result);
+          break;
+
+        case 'APPLY_AI_REVAMP':
+          this.applyRevampChanges(message.payload).then(sendResponse);
+          return true; // Keep channel open for async
+
+        case 'PREVIEW_CHANGES':
+          this.previewChanges(message.payload).then(sendResponse);
+          return true;
+
+        case 'CLEAR_PREVIEW':
+          this.clearPreview();
+          sendResponse({ success: true });
+          break;
+
+        case 'UNDO_CHANGE':
+          const undoSuccess = changeManager.undo();
+          sendResponse({ success: undoSuccess, undoCount: changeManager.getUndoStackSize() });
+          break;
+
+        case 'UNDO_ALL':
+          const undoneCount = changeManager.undoAll();
+          sendResponse({ success: true, undoneCount });
           break;
 
         case 'GET_ELEMENT_INFO':
@@ -640,59 +672,281 @@ class RevampInspector {
    */
   applyAIChange(payload: ApplyChangePayload): MessageResponse {
     try {
-      const element = SelectorGenerator.resolve(
-        payload.selector.selector,
-        payload.selector.type
-      );
+      console.log('[Revamp] Applying AI change:', payload);
 
-      if (!element) {
+      // For script action, we don't need to resolve element first
+      if (payload.action === 'script') {
+        try {
+          // Execute script in page context safely
+          const script = document.createElement('script');
+          script.textContent = `(function() { ${payload.value} })();`;
+          document.head.appendChild(script);
+          script.remove();
+          
+          this.addToHistory({
+            selector: { selector: 'document', type: 'xpath', confidence: 'high' },
+            type: 'style', // Use generic type for history
+            value: { script: payload.value },
+            originalValue: null,
+          });
+          
+          return { success: true };
+        } catch (error) {
+          return {
+            success: false,
+            error: `Script execution failed: ${error}`,
+          };
+        }
+      }
+
+      // Resolve element(s) for other actions
+      const selectorStr = payload.selector.selector;
+      const selectorType = payload.selector.type;
+      
+      console.log('[Revamp] Selector:', selectorStr, 'Type:', selectorType);
+      
+      // Check if selector targets multiple elements (page-level)
+      let elements: Element[];
+      
+      // Always try querySelectorAll for css-path type or comma-separated selectors
+      if (selectorType === 'css-path' || selectorStr.includes(',')) {
+        try {
+          const nodeList = document.querySelectorAll(selectorStr);
+          elements = Array.from(nodeList);
+          console.log('[Revamp] Found', elements.length, 'elements with querySelectorAll');
+        } catch (e) {
+          console.error('[Revamp] querySelectorAll failed:', e);
+          elements = [];
+        }
+      } else {
+        // Single element resolution
+        const singleElement = SelectorGenerator.resolve(selectorStr, selectorType);
+        elements = singleElement ? [singleElement] : [];
+        console.log('[Revamp] Found', elements.length, 'element with SelectorGenerator');
+      }
+
+      if (elements.length === 0) {
+        console.error('[Revamp] No elements found for selector:', selectorStr);
         return {
           success: false,
-          error: 'Element not found',
+          error: `No elements found matching selector: ${selectorStr}`,
         };
       }
 
-      switch (payload.action) {
-        case 'text':
-          this.editText(payload.selector, payload.value);
-          break;
+      console.log('[Revamp] Applying', payload.action, 'to', elements.length, 'element(s)');
 
-        case 'html':
-          if (element) {
-            this.addToHistory({
-              selector: payload.selector,
-              type: 'html',
-              value: payload.value,
-              originalValue: element.innerHTML,
-            });
-            element.innerHTML = payload.value;
+      // Apply changes to all matched elements
+      let appliedCount = 0;
+      
+      for (const element of elements) {
+        try {
+          switch (payload.action) {
+            case 'text':
+              // Save original for undo (only for first element to avoid history bloat)
+              if (appliedCount === 0) {
+                this.addToHistory({
+                  selector: payload.selector,
+                  type: 'text',
+                  value: payload.value,
+                  originalValue: element.textContent,
+                });
+              }
+              element.textContent = payload.value;
+              appliedCount++;
+              break;
+
+            case 'html':
+              if (appliedCount === 0) {
+                this.addToHistory({
+                  selector: payload.selector,
+                  type: 'html',
+                  value: payload.value,
+                  originalValue: element.innerHTML,
+                });
+              }
+              element.innerHTML = payload.value;
+              appliedCount++;
+              break;
+
+            case 'css':
+              if (element instanceof HTMLElement) {
+                // Get current styles for undo (only for first element)
+                if (appliedCount === 0) {
+                  const originalStyles: Record<string, string> = {};
+                  Object.keys(payload.value).forEach((property) => {
+                    originalStyles[property] = element.style.getPropertyValue(property);
+                  });
+                  
+                  this.addToHistory({
+                    selector: payload.selector,
+                    type: 'style',
+                    value: payload.value,
+                    originalValue: originalStyles,
+                  });
+                }
+
+                // Apply styles
+                Object.entries(payload.value as Record<string, string>).forEach(
+                  ([property, value]) => {
+                    element.style.setProperty(property, value);
+                  }
+                );
+                appliedCount++;
+              }
+              break;
+
+            case 'attribute':
+              if (payload.attribute) {
+                if (appliedCount === 0) {
+                  this.addToHistory({
+                    selector: payload.selector,
+                    type: 'attribute',
+                    value: { attribute: payload.attribute, value: payload.value },
+                    originalValue: element.getAttribute(payload.attribute),
+                  });
+                }
+                element.setAttribute(payload.attribute, payload.value);
+                appliedCount++;
+              }
+              break;
+
+            default:
+              return {
+                success: false,
+                error: `Unknown action: ${payload.action}`,
+              };
           }
-          break;
-
-        case 'css':
-          this.applyCSS(payload.selector, payload.value);
-          break;
-
-        case 'attribute':
-          if (payload.attribute) {
-            this.editAttribute(payload.selector, payload.attribute, payload.value);
-          }
-          break;
-
-        default:
-          return {
-            success: false,
-            error: `Unknown action: ${payload.action}`,
-          };
+        } catch (elementError) {
+          console.warn('[Revamp] Failed to apply change to element:', elementError);
+        }
       }
 
-      return { success: true };
+      if (appliedCount === 0) {
+        return {
+          success: false,
+          error: 'Failed to apply changes to any elements',
+        };
+      }
+
+      console.log(`[Revamp] Applied ${payload.action} to ${appliedCount} element(s)`);
+      return { 
+        success: true,
+        data: { appliedCount },
+      };
     } catch (error) {
       return {
         success: false,
         error: String(error),
       };
     }
+  }
+
+  /**
+   * Apply AI Revamp Changes (new structured format)
+   */
+  async applyRevampChanges(payload: ApplyRevampPayload): Promise<MessageResponse> {
+    try {
+      let response: AIRevampResponse | null = null;
+
+      // Parse response if raw text provided
+      if (payload.rawResponse) {
+        response = AIResponseParser.parse(payload.rawResponse);
+      } else if (payload.parsedResponse) {
+        response = payload.parsedResponse;
+      }
+
+      if (!response || !response.changes || response.changes.length === 0) {
+        return {
+          success: false,
+          error: 'No valid changes found in AI response'
+        };
+      }
+
+      console.log('[Revamp] Applying', response.changes.length, 'changes');
+
+      // Apply all changes using ChangeManager
+      const results = await changeManager.applyChanges(response.changes);
+
+      // Calculate summary
+      const successCount = results.filter(r => r.success).length;
+      const totalElements = results.reduce((sum, r) => sum + r.elementsAffected, 0);
+      const failures = results.filter(r => !r.success);
+
+      return {
+        success: successCount > 0,
+        data: {
+          summary: `Applied ${successCount}/${response.changes.length} changes to ${totalElements} element(s)`,
+          results,
+          failures: failures.length > 0 ? failures : undefined,
+          undoCount: changeManager.getUndoStackSize()
+        }
+      };
+
+    } catch (error) {
+      console.error('[Revamp] Error applying revamp changes:', error);
+      return {
+        success: false,
+        error: String(error)
+      };
+    }
+  }
+
+  /**
+   * Preview changes without applying
+   */
+  async previewChanges(payload: ApplyRevampPayload): Promise<MessageResponse> {
+    try {
+      let response: AIRevampResponse | null = null;
+
+      if (payload.rawResponse) {
+        response = AIResponseParser.parse(payload.rawResponse);
+      } else if (payload.parsedResponse) {
+        response = payload.parsedResponse;
+      }
+
+      if (!response || !response.changes) {
+        return { success: false, error: 'No valid changes to preview' };
+      }
+
+      // Highlight elements that will be changed
+      response.changes.forEach(change => {
+        const elements = document.querySelectorAll(change.selector);
+        elements.forEach(el => {
+          const htmlEl = el as HTMLElement;
+          htmlEl.style.outline = '2px dashed #3b82f6';
+          htmlEl.style.outlineOffset = '2px';
+          htmlEl.setAttribute('data-revamp-preview', change.id);
+          htmlEl.title = `[${change.action}] ${change.explanation}`;
+        });
+      });
+
+      return {
+        success: true,
+        data: {
+          message: `Previewing ${response.changes.length} changes`,
+          changes: response.changes
+        }
+      };
+
+    } catch (error) {
+      return {
+        success: false,
+        error: String(error)
+      };
+    }
+  }
+
+  /**
+   * Clear preview highlights
+   */
+  clearPreview(): void {
+    document.querySelectorAll('[data-revamp-preview]').forEach(el => {
+      const htmlEl = el as HTMLElement;
+      htmlEl.style.outline = '';
+      htmlEl.style.outlineOffset = '';
+      htmlEl.removeAttribute('data-revamp-preview');
+      htmlEl.title = '';
+    });
   }
 
   /**
