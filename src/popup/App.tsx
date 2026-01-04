@@ -112,7 +112,12 @@ const App: React.FC = () => {
             onClear={() => setSelectedElement(null)}
           />
         )}
-        {activeTab === 'ai' && <AIChatBox selectedElement={selectedElement} />}
+        {activeTab === 'ai' && (
+          <AIChatBox
+            selectedElement={selectedElement}
+            onClear={() => setSelectedElement(null)}
+          />
+        )}
         {activeTab === 'export' && <ExportPanel />}
         {activeTab === 'settings' && <Settings />}
       </main>

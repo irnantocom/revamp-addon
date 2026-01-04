@@ -86,6 +86,14 @@ chrome.runtime.onMessage.addListener(
         handleAIRequest(message.payload, sendResponse);
         return true;
 
+      case 'FETCH_MODELS':
+        handleFetchModels(message.payload, sendResponse);
+        return true;
+
+      case 'VALIDATE_API_KEY':
+        handleValidateApiKey(message.payload, sendResponse);
+        return true;
+
       case 'INJECT_CONTENT_SCRIPT':
         handleInjectContentScript(sender.tab?.id, sendResponse);
         return true;
@@ -207,6 +215,198 @@ async function handleInjectContentScript(
   } catch (error) {
     sendResponse({ success: false, error: String(error) });
   }
+}
+
+// Fetch available models for a provider
+async function handleFetchModels(
+  payload: { provider: string; apiKey: string },
+  sendResponse: (response: MessageResponse) => void
+) {
+  try {
+    let models: string[] = [];
+
+    switch (payload.provider) {
+      case 'openai':
+        models = await fetchOpenAIModels(payload.apiKey);
+        break;
+      case 'gemini':
+        models = await fetchGeminiModels(payload.apiKey);
+        break;
+      case 'claude':
+        models = await fetchClaudeModels(payload.apiKey);
+        break;
+      case 'groq':
+        models = await fetchGroqModels(payload.apiKey);
+        break;
+      default:
+        // Return default models for other providers
+        models = getDefaultModels(payload.provider);
+    }
+
+    sendResponse({ success: true, data: models });
+  } catch (error) {
+    sendResponse({ success: false, error: String(error) });
+  }
+}
+
+// Validate API key for a provider
+async function handleValidateApiKey(
+  payload: { provider: string; apiKey: string },
+  sendResponse: (response: MessageResponse) => void
+) {
+  try {
+    let isValid = false;
+
+    switch (payload.provider) {
+      case 'openai':
+        isValid = await validateOpenAIKey(payload.apiKey);
+        break;
+      case 'gemini':
+        isValid = await validateGeminiKey(payload.apiKey);
+        break;
+      case 'claude':
+        isValid = await validateClaudeKey(payload.apiKey);
+        break;
+      default:
+        // Assume valid for other providers (can't easily validate)
+        isValid = payload.apiKey.length > 10;
+    }
+
+    sendResponse({ success: true, data: { isValid } });
+  } catch (error) {
+    sendResponse({ success: false, error: String(error) });
+  }
+}
+
+// ============ API-specific model fetchers ============
+
+async function fetchOpenAIModels(apiKey: string): Promise<string[]> {
+  try {
+    const response = await fetch('https://api.openai.com/v1/models', {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    });
+
+    if (!response.ok) return getDefaultModels('openai');
+
+    const data = await response.json();
+    // Filter for GPT models only and sort by relevance
+    const gptModels = data.data
+      .filter((m: any) => m.id.includes('gpt') && !m.id.includes('instruct'))
+      .map((m: any) => m.id)
+      .sort((a: string, b: string) => {
+        // Prioritize gpt-4o, gpt-4, gpt-3.5
+        if (a.includes('gpt-4o')) return -1;
+        if (b.includes('gpt-4o')) return 1;
+        if (a.includes('gpt-4')) return -1;
+        if (b.includes('gpt-4')) return 1;
+        return a.localeCompare(b);
+      });
+
+    return gptModels.length > 0 ? gptModels.slice(0, 10) : getDefaultModels('openai');
+  } catch {
+    return getDefaultModels('openai');
+  }
+}
+
+async function fetchGeminiModels(apiKey: string): Promise<string[]> {
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+    );
+
+    if (!response.ok) return getDefaultModels('gemini');
+
+    const data = await response.json();
+    // Filter for generateContent-supported models
+    const geminiModels = data.models
+      .filter((m: any) => 
+        m.name.includes('gemini') && 
+        m.supportedGenerationMethods?.includes('generateContent')
+      )
+      .map((m: any) => m.name.replace('models/', ''))
+      .sort((a: string, b: string) => {
+        // Prioritize newer/flash models
+        if (a.includes('flash')) return -1;
+        if (b.includes('flash')) return 1;
+        if (a.includes('2.0')) return -1;
+        if (b.includes('2.0')) return 1;
+        return a.localeCompare(b);
+      });
+
+    return geminiModels.length > 0 ? geminiModels.slice(0, 10) : getDefaultModels('gemini');
+  } catch {
+    return getDefaultModels('gemini');
+  }
+}
+
+async function fetchClaudeModels(_apiKey: string): Promise<string[]> {
+  // Claude doesn't have a public model list API
+  // Return known models
+  return getDefaultModels('claude');
+}
+
+async function fetchGroqModels(apiKey: string): Promise<string[]> {
+  try {
+    const response = await fetch('https://api.groq.com/openai/v1/models', {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    });
+
+    if (!response.ok) return getDefaultModels('groq');
+
+    const data = await response.json();
+    const models = data.data
+      .filter((m: any) => m.active)
+      .map((m: any) => m.id);
+
+    return models.length > 0 ? models : getDefaultModels('groq');
+  } catch {
+    return getDefaultModels('groq');
+  }
+}
+
+// ============ API key validators ============
+
+async function validateOpenAIKey(apiKey: string): Promise<boolean> {
+  try {
+    const response = await fetch('https://api.openai.com/v1/models', {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function validateGeminiKey(apiKey: string): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+    );
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function validateClaudeKey(apiKey: string): Promise<boolean> {
+  // Simple validation - Claude key format check
+  return apiKey.startsWith('sk-ant-') && apiKey.length > 20;
+}
+
+// ============ Default models fallback ============
+
+function getDefaultModels(provider: string): string[] {
+  const defaults: Record<string, string[]> = {
+    openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+    claude: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
+    gemini: ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-2.0-flash-exp'],
+    perplexity: ['llama-3.1-sonar-large-128k-online', 'llama-3.1-sonar-small-128k-online'],
+    mistral: ['mistral-large-latest', 'mistral-small-latest', 'open-mistral-nemo'],
+    cohere: ['command-r-plus', 'command-r', 'command'],
+    groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
+    openrouter: ['openai/gpt-4o', 'anthropic/claude-3.5-sonnet', 'google/gemini-2.0-flash-exp:free'],
+  };
+  return defaults[provider] || [];
 }
 
 export {};

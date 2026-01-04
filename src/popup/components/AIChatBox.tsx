@@ -39,31 +39,142 @@ interface Props {
     tagName: string;
     textContent: string;
   } | null;
+  onClear?: () => void;
 }
 
-const AIChatBox: React.FC<Props> = ({ selectedElement }) => {
+const AIChatBox: React.FC<Props> = ({ selectedElement, onClear }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [provider, setProvider] = useState('openai');
-  const [model, setModel] = useState('gpt-4o');
+  const [provider, setProvider] = useState('');
+  const [model, setModel] = useState('');
   const [inspectorActive, setInspectorActive] = useState(false);
+  const [availableProviders, setAvailableProviders] = useState<string[]>([]);
+  const [providerModels, setProviderModels] = useState<Record<string, string[]>>({});
+  const [apiKeysLoaded, setApiKeysLoaded] = useState(false);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const modelOptions: Record<string, string[]> = {
-    openai: ['gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo'],
-    claude: ['claude-3-5-sonnet-20241022', 'claude-3-opus-20240229'],
-    gemini: ['gemini-1.5-pro', 'gemini-1.5-flash'],
-    perplexity: ['llama-3.1-sonar-large-128k-online', 'llama-3.1-sonar-small-128k-online'],
-    mistral: ['mistral-large-latest', 'mistral-medium-latest'],
-    cohere: ['command-r-plus', 'command-r'],
-    groq: ['llama-3.1-70b-versatile', 'mixtral-8x7b-32768'],
-    openrouter: ['openai/gpt-4o', 'anthropic/claude-3.5-sonnet'],
+  // Provider labels for display
+  const providerLabels: Record<string, string> = {
+    openai: 'OpenAI',
+    claude: 'Claude',
+    gemini: 'Gemini',
+    perplexity: 'Perplexity',
+    mistral: 'Mistral',
+    cohere: 'Cohere',
+    groq: 'Groq',
+    openrouter: 'OpenRouter',
   };
 
+  // Default model options (fallback if API fetch fails)
+  const defaultModelOptions: Record<string, string[]> = {
+    openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+    claude: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
+    gemini: ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-2.0-flash-exp'],
+    perplexity: ['llama-3.1-sonar-large-128k-online', 'llama-3.1-sonar-small-128k-online'],
+    mistral: ['mistral-large-latest', 'mistral-small-latest', 'open-mistral-nemo'],
+    cohere: ['command-r-plus', 'command-r', 'command'],
+    groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
+    openrouter: ['openai/gpt-4o', 'anthropic/claude-3.5-sonnet', 'google/gemini-2.0-flash-exp:free'],
+  };
+
+  // Load API keys and determine available providers
   useEffect(() => {
-    setModel(modelOptions[provider][0]);
-  }, [provider]);
+    const loadApiKeys = async () => {
+      try {
+        const response = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
+        if (response.success && response.data.apiKeys) {
+          const keys = response.data.apiKeys;
+          setApiKeys(keys);
+          
+          // Filter providers that have API keys set
+          const available = Object.entries(keys)
+            .filter(([_, value]) => value && (value as string).trim() !== '')
+            .map(([key, _]) => key);
+          
+          setAvailableProviders(available);
+          
+          // Set default provider to first available
+          if (available.length > 0) {
+            setProvider(available[0]);
+          }
+        }
+        setApiKeysLoaded(true);
+      } catch (error) {
+        console.error('[AI Chat] Failed to load API keys:', error);
+        setApiKeysLoaded(true);
+      }
+    };
+
+    loadApiKeys();
+  }, []);
+
+  // Fetch models when provider changes
+  useEffect(() => {
+    const fetchModelsForProvider = async () => {
+      if (!provider || !apiKeys[provider]) return;
+
+      // Check if we already have models for this provider
+      if (providerModels[provider] && providerModels[provider].length > 0) {
+        setModel(providerModels[provider][0]);
+        return;
+      }
+
+      setLoadingModels(true);
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: 'FETCH_MODELS',
+          payload: { provider, apiKey: apiKeys[provider] }
+        });
+
+        if (response.success && response.data && response.data.length > 0) {
+          setProviderModels(prev => ({
+            ...prev,
+            [provider]: response.data
+          }));
+          setModel(response.data[0]);
+        } else {
+          // Fallback to defaults
+          const defaults = defaultModelOptions[provider] || [];
+          setProviderModels(prev => ({
+            ...prev,
+            [provider]: defaults
+          }));
+          setModel(defaults[0] || '');
+        }
+      } catch (error) {
+        console.error('[AI Chat] Failed to fetch models:', error);
+        // Fallback to defaults
+        const defaults = defaultModelOptions[provider] || [];
+        setProviderModels(prev => ({
+          ...prev,
+          [provider]: defaults
+        }));
+        setModel(defaults[0] || '');
+      } finally {
+        setLoadingModels(false);
+      }
+    };
+
+    fetchModelsForProvider();
+  }, [provider, apiKeys]);
+
+  // Listen for inspector state changes from content script
+  useEffect(() => {
+    const handleMessage = (message: any) => {
+      if (message.type === 'INSPECTOR_STATE_CHANGED') {
+        setInspectorActive(message.isActive);
+      }
+    };
+
+    chrome.runtime.onMessage.addListener(handleMessage);
+    
+    return () => {
+      chrome.runtime.onMessage.removeListener(handleMessage);
+    };
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -211,7 +322,17 @@ use context7`,
   };
 
   const clearChat = () => {
-    setMessages([]);
+    console.log('[AI Chat] Clear button clicked, messages count:', messages.length);
+    if (messages.length === 0) {
+      console.log('[AI Chat] No messages to clear');
+      return;
+    }
+    if (confirm('Clear all chat messages?')) {
+      console.log('[AI Chat] Clearing messages');
+      setMessages([]);
+    } else {
+      console.log('[AI Chat] Clear cancelled by user');
+    }
   };
 
   const toggleInspector = async () => {
@@ -294,10 +415,15 @@ use context7`,
             </button>
             <button
               onClick={clearChat}
-              className="text-xs text-gray-500 hover:text-gray-700"
+              className={`text-xs px-3 py-1 rounded transition-colors ${
+                messages.length === 0
+                  ? 'text-gray-400 cursor-not-allowed'
+                  : 'text-gray-600 hover:text-red-600 hover:bg-red-50'
+              }`}
               disabled={messages.length === 0}
+              title={messages.length === 0 ? 'No messages to clear' : 'Clear all messages'}
             >
-              Clear
+              Clear Chat
             </button>
           </div>
         </div>
@@ -306,13 +432,24 @@ use context7`,
         {selectedElement && (
           <div className="bg-green-50 border border-green-200 rounded p-2 text-xs mb-2">
             <div className="flex items-center justify-between">
-              <div>
-                <span className="font-semibold text-green-800">Selected:</span>{' '}
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-green-800">Selected:</span>
                 <code className="bg-green-100 px-1 py-0.5 rounded text-green-900">
                   {selectedElement.tagName}
                 </code>
               </div>
-              <span className="text-green-600 text-xs">✓ Ready</span>
+              <div className="flex items-center gap-2">
+                <span className="text-green-600 text-xs">✓ Ready</span>
+                {onClear && (
+                  <button
+                    onClick={onClear}
+                    className="text-xs text-green-700 hover:text-red-600 hover:underline transition-colors"
+                    title="Clear selected element"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
             </div>
             <div className="mt-1 text-green-700 truncate" title={selectedElement.selector.selector}>
               {selectedElement.selector.selector}
@@ -320,34 +457,44 @@ use context7`,
           </div>
         )}
 
-        {/* Provider selection */}
-        <div className="flex gap-2">
-          <select
-            value={provider}
-            onChange={(e) => setProvider(e.target.value)}
-            className="flex-1 text-xs border border-gray-300 rounded px-2 py-1"
-          >
-            <option value="openai">OpenAI</option>
-            <option value="claude">Claude</option>
-            <option value="gemini">Gemini</option>
-            <option value="perplexity">Perplexity</option>
-            <option value="mistral">Mistral</option>
-            <option value="cohere">Cohere</option>
-            <option value="groq">Groq</option>
-            <option value="openrouter">OpenRouter</option>
-          </select>
-          <select
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            className="flex-1 text-xs border border-gray-300 rounded px-2 py-1"
-          >
-            {modelOptions[provider].map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
-        </div>
+        {/* Provider selection - Only show providers with API keys */}
+        {!apiKeysLoaded ? (
+          <div className="text-xs text-gray-500 text-center py-2">Loading providers...</div>
+        ) : availableProviders.length === 0 ? (
+          <div className="bg-yellow-50 border border-yellow-200 rounded p-2 text-xs text-yellow-800">
+            ⚠️ No API keys configured. Go to <strong>Settings</strong> tab to add your API keys.
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <select
+              value={provider}
+              onChange={(e) => setProvider(e.target.value)}
+              className="flex-1 text-xs border border-gray-300 rounded px-2 py-1"
+            >
+              {availableProviders.map((p) => (
+                <option key={p} value={p}>
+                  {providerLabels[p] || p}
+                </option>
+              ))}
+            </select>
+            <select
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              className="flex-1 text-xs border border-gray-300 rounded px-2 py-1"
+              disabled={loadingModels}
+            >
+              {loadingModels ? (
+                <option value="">Loading models...</option>
+              ) : (
+                (providerModels[provider] || defaultModelOptions[provider] || []).map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+        )}
       </div>
 
       {/* Messages */}

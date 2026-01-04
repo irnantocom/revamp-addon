@@ -77,9 +77,18 @@ const ElementEditor: React.FC<Props> = ({ element, onClear }) => {
 
       alert('Attribute updated successfully!');
       
-      // Reset custom attribute name after successful update
-      if (selectedAttribute === 'custom') {
+      // Update local state to reflect the new attribute
+      if (selectedAttribute === 'custom' && customAttributeName) {
+        // Add the new attribute to the element's attributes
+        element.attributes[customAttributeName] = attributeValue;
+        // Reset form
         setCustomAttributeName('');
+        setSelectedAttribute('');
+        setAttributeValue('');
+      } else {
+        // Just reset the value for existing attributes
+        setAttributeValue('');
+        setSelectedAttribute('');
       }
     } catch (error) {
       console.error('[Popup] Failed to edit attribute:', error);

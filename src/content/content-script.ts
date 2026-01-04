@@ -197,13 +197,16 @@ class RevampInspector {
   private createFloatingPanel(): void {
     if (this.panelElement) return;
 
+    // Load saved position from localStorage
+    const savedPos = this.loadPanelPosition();
+
     // Create container
     const container = document.createElement('div');
     container.id = 'revamp-floating-panel';
     container.style.cssText = `
       position: fixed;
-      top: 80px;
-      right: 20px;
+      ${savedPos.x !== null ? `left: ${savedPos.x}px;` : 'right: 20px;'}
+      ${savedPos.y !== null ? `top: ${savedPos.y}px;` : 'top: 80px;'}
       width: 420px;
       height: 600px;
       z-index: 2147483647;
@@ -216,6 +219,7 @@ class RevampInspector {
 
     // Create drag handle
     const dragHandle = document.createElement('div');
+    dragHandle.classList.add('revamp-drag-handle');
     dragHandle.style.cssText = `
       position: absolute;
       top: 0;
@@ -231,11 +235,13 @@ class RevampInspector {
       font-size: 12px;
       color: #6b7280;
       font-family: system-ui, -apple-system, sans-serif;
+      user-select: none;
     `;
     dragHandle.innerHTML = '⋮⋮ Revamp Panel - Drag to move';
 
     // Create close button
     const closeBtn = document.createElement('button');
+    closeBtn.id = 'revamp-close-btn';
     closeBtn.innerHTML = '✕';
     closeBtn.style.cssText = `
       position: absolute;
@@ -255,6 +261,7 @@ class RevampInspector {
       border-radius: 4px;
       z-index: 10;
     `;
+    
     closeBtn.addEventListener('mouseover', () => {
       closeBtn.style.background = '#fee2e2';
       closeBtn.style.color = '#dc2626';
@@ -263,10 +270,12 @@ class RevampInspector {
       closeBtn.style.background = 'transparent';
       closeBtn.style.color = '#6b7280';
     });
-    closeBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.togglePanel();
-    });
+    
+    // Direct onclick for immediate close
+    closeBtn.onclick = () => {
+      this.removeFloatingPanel();
+      this.panelOpen = false;
+    };
 
     dragHandle.appendChild(closeBtn);
 
@@ -286,7 +295,7 @@ class RevampInspector {
 
     this.panelElement = iframe;
 
-    // Make draggable
+    // Make draggable with professional logic
     this.makeDraggable(container, dragHandle);
 
     // Prevent clicks on panel from triggering inspector
@@ -295,41 +304,96 @@ class RevampInspector {
   }
 
   /**
-   * Make panel draggable
+   * Make panel draggable - Professional implementation
+   * Based on industry best practices (DevTools, Elementor pattern)
    */
-  private makeDraggable(element: HTMLElement, handle: HTMLElement): void {
-    let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+  private makeDraggable(panel: HTMLElement, header: HTMLElement): void {
+    let isDragging = false;
+    let offsetX = 0;
+    let offsetY = 0;
 
-    const dragMouseDown = (e: MouseEvent) => {
-      // Only drag from handle, not from close button
-      if ((e.target as HTMLElement).tagName === 'BUTTON') return;
+    // Mouse down on header - start drag
+    const onMouseDown = (e: MouseEvent) => {
+      // Ignore if clicking on close button
+      const target = e.target as HTMLElement;
+      if (target.id === 'revamp-close-btn' || target.tagName === 'BUTTON') {
+        return;
+      }
+
+      isDragging = true;
+      
+      // Calculate offset from mouse to panel's top-left
+      offsetX = e.clientX - panel.getBoundingClientRect().left;
+      offsetY = e.clientY - panel.getBoundingClientRect().top;
+
+      // Disable text selection during drag
+      document.body.style.userSelect = 'none';
       
       e.preventDefault();
       e.stopPropagation();
-      pos3 = e.clientX;
-      pos4 = e.clientY;
-      document.addEventListener('mouseup', closeDragElement, true);
-      document.addEventListener('mousemove', elementDrag, true);
     };
 
-    const elementDrag = (e: MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      pos1 = pos3 - e.clientX;
-      pos2 = pos4 - e.clientY;
-      pos3 = e.clientX;
-      pos4 = e.clientY;
-      element.style.top = (element.offsetTop - pos2) + 'px';
-      element.style.left = (element.offsetLeft - pos1) + 'px';
-      element.style.right = 'auto';
+    // Mouse move - perform drag
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isDragging) return;
+
+      // Calculate and apply new position
+      panel.style.left = `${e.clientX - offsetX}px`;
+      panel.style.top = `${e.clientY - offsetY}px`;
+      panel.style.right = 'auto';
+      panel.style.bottom = 'auto';
     };
 
-    const closeDragElement = () => {
-      document.removeEventListener('mouseup', closeDragElement, true);
-      document.removeEventListener('mousemove', elementDrag, true);
+    // Mouse up - end drag
+    const onMouseUp = () => {
+      if (!isDragging) return;
+      
+      isDragging = false;
+      
+      // Re-enable text selection
+      document.body.style.userSelect = '';
+
+      // Save position to localStorage
+      this.savePanelPosition(panel.offsetLeft, panel.offsetTop);
     };
 
-    handle.addEventListener('mousedown', dragMouseDown, true);
+    // Attach event listeners
+    header.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+
+    // Store cleanup function for later removal
+    (panel as any).__dragCleanup = () => {
+      header.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+  }
+
+  /**
+   * Save panel position to localStorage
+   */
+  private savePanelPosition(x: number, y: number): void {
+    try {
+      localStorage.setItem('revamp-panel-position', JSON.stringify({ x, y }));
+    } catch (error) {
+      console.warn('[Revamp] Failed to save panel position:', error);
+    }
+  }
+
+  /**
+   * Load panel position from localStorage
+   */
+  private loadPanelPosition(): { x: number | null; y: number | null } {
+    try {
+      const saved = localStorage.getItem('revamp-panel-position');
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (error) {
+      console.warn('[Revamp] Failed to load panel position:', error);
+    }
+    return { x: null, y: null };
   }
 
   /**
@@ -338,6 +402,10 @@ class RevampInspector {
   private removeFloatingPanel(): void {
     const container = document.getElementById('revamp-floating-panel');
     if (container) {
+      // Cleanup drag event listeners
+      if ((container as any).__dragCleanup) {
+        (container as any).__dragCleanup();
+      }
       container.remove();
       this.panelElement = null;
     }
