@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AIResponseParser } from '../../utils/ai-response-parser';
 import { AIRevampResponse, AIChange } from '../../types/ai-response';
+import { SubtreeSnapshot } from '../../types/dom-snapshot';
 import ChangePreview from './ChangePreview';
 
 // Helper to ensure content script is ready
@@ -22,6 +23,63 @@ const ensureContentScript = async (tabId: number): Promise<boolean> => {
 
   console.error('[AI Chat] Content script failed to load after retries');
   return false;
+};
+
+/**
+ * Build element context from subtree snapshot
+ */
+const buildElementContext = (snapshot: SubtreeSnapshot | null): string => {
+  if (!snapshot) {
+    return 'No element selected. Operating on entire page (body tag).';
+  }
+
+  const mode = snapshot.mode === 'element' ? 'ELEMENT-LEVEL' : 'PAGE-LEVEL';
+  
+  // Build children summary
+  const childrenSummary = snapshot.children
+    .filter(child => child.isVisible)
+    .map(child => {
+      const parts = [`  - <${child.tag}>`];
+      if (child.id) parts.push(`id="${child.id}"`);
+      if (child.classes.length > 0) parts.push(`class="${child.classes.slice(0, 3).join(' ')}"`);
+      if (child.src) parts.push(`src="${child.src}"`);
+      if (child.href) parts.push(`href="${child.href}"`);
+      if (child.textContent && child.textContent.length > 0) {
+        const preview = child.textContent.substring(0, 100);
+        parts.push(`text="${preview}${child.textContent.length > 100 ? '...' : ''}"`);
+      }
+      parts.push(`→ selector: "${child.selector}"`);
+      return parts.join(' ');
+    })
+    .join('\n');
+
+  // Build ALL IMAGES summary (includes nested images)
+  const imagesSummary = snapshot.allImages && snapshot.allImages.length > 0
+    ? snapshot.allImages
+        .filter(img => img.isVisible)
+        .map((img, index) => {
+          return `  [IMG-${index + 1}] src="${img.src}" → selector: "${img.selector}"`;
+        })
+        .join('\n')
+    : '  (no images found)';
+
+  return `MODE: ${mode}
+
+ROOT ELEMENT:
+- Tag: <${snapshot.rootTag}>
+- Selector: "${snapshot.rootSelector}"
+- Attributes: ${JSON.stringify(snapshot.attributes.slice(0, 5))}
+- Text Content: "${snapshot.textContent.substring(0, 200)}${snapshot.textContent.length > 200 ? '...' : ''}"
+
+CHILDREN (${snapshot.children.length} total, ${snapshot.children.filter(c => c.isVisible).length} visible):
+${childrenSummary || '  (no visible children)'}
+
+⚠️ ALL IMAGES IN THIS ELEMENT (${snapshot.allImages?.length || 0} total, IMPORTANT FOR IMAGE CHANGES):
+${imagesSummary}
+
+INNER HTML (first 1000 chars):
+${snapshot.innerHTML.substring(0, 1000)}${snapshot.innerHTML.length > 1000 ? '\n...(truncated)' : ''}
+`;
 };
 
 interface Message {
@@ -81,7 +139,7 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear }) => {
   const defaultModelOptions: Record<string, string[]> = {
     openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
     claude: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
-    gemini: ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-2.0-flash-exp'],
+    gemini: ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-1.5-pro', 'gemini-2.0-flash-exp'],
     perplexity: ['llama-3.1-sonar-large-128k-online', 'llama-3.1-sonar-small-128k-online'],
     mistral: ['mistral-large-latest', 'mistral-small-latest', 'open-mistral-nemo'],
     cohere: ['command-r-plus', 'command-r', 'command'],
@@ -277,32 +335,31 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear }) => {
         throw new Error('Failed to initialize content script. Please refresh the page.');
       }
 
-      // Get detailed element info if selected
-      let elementContext = '';
-      if (selectedElement) {
-        try {
-          const elementInfoResponse = await chrome.tabs.sendMessage(tab.id, {
-            type: 'GET_ELEMENT_INFO',
-            payload: { selector: selectedElement.selector },
-          });
+      // Fetch subtree snapshot of selected element (or body if none selected)
+      let snapshot: SubtreeSnapshot | null = null;
+      try {
+        const snapshotResponse = await chrome.tabs.sendMessage(tab.id, {
+          type: 'GET_SUBTREE_SNAPSHOT',
+          selector: selectedElement?.selector?.selector || undefined,
+        });
 
-        if (elementInfoResponse.success) {
-          const info = elementInfoResponse.data;
-          elementContext = `Selected element: <${info.tagName}>
-Selector: ${selectedElement.selector.selector}
-Current text: "${info.textContent}"
-Current styles: ${JSON.stringify(info.computedStyles, null, 2)}
-Attributes: ${JSON.stringify(info.attributes, null, 2)}`;
+        if (snapshotResponse.success) {
+          snapshot = snapshotResponse.snapshot;
+          console.log('[AI Chat] Subtree snapshot received:', {
+            mode: snapshot?.mode,
+            rootSelector: snapshot?.rootSelector,
+            childrenCount: snapshot?.children.length
+          });
         } else {
-          elementContext = `Selected element: <${selectedElement.tagName}> with selector "${selectedElement.selector.selector}"`;
+          console.warn('[AI Chat] Failed to get snapshot:', snapshotResponse.error);
         }
-        } catch (elementError) {
-          console.warn('[AI Chat] Could not get element info:', elementError);
-          elementContext = `Selected element: <${selectedElement.tagName}> with selector "${selectedElement.selector.selector}"`;
-        }
+      } catch (snapshotError) {
+        console.warn('[AI Chat] Could not get subtree snapshot:', snapshotError);
       }
 
-      // Send to background worker with adaptive prompt
+      // Build adaptive context with subtree information
+      const elementContext = buildElementContext(snapshot);
+
       const response = await chrome.runtime.sendMessage({
         type: 'AI_REQUEST',
         payload: {
@@ -318,26 +375,35 @@ You can operate in TWO MODES depending on the context:
 ────────────────────────────
 MODE 1: ELEMENT-LEVEL EDITING
 ────────────────────────────
-If a selected element context is provided:
-- Focus ONLY on the selected element and its immediate structure
-- Do NOT make assumptions about the rest of the page
-- Suggest minimal and targeted changes
+When a specific element is selected, focus on targeted changes within that element and its children.
+Analyze the children structure carefully to identify what needs to be changed.
 
-${elementContext || 'No element is currently selected.'}
-
-────────────────────────────
 MODE 2: PAGE-LEVEL TRANSFORMATION
 ────────────────────────────
-If NO selected element is provided:
-- Assume the user wants to modify the OVERALL PAGE
-- Analyze the ENTIRE visible page structure:
-  - HTML hierarchy
-  - Layout sections (header, hero, content, footer, etc.)
-  - Typography patterns
-  - Color system
-  - Spacing and alignment
-- Treat the page as a redesign or refactor task
-- Apply changes consistently across the page
+When no element is selected (body tag), analyze and transform the entire page structure.
+
+────────────────────────────
+CURRENT CONTEXT
+────────────────────────────
+${elementContext}
+
+────────────────────────────
+IMPORTANT INSTRUCTIONS
+────────────────────────────
+1. When user provides a link with content, analyze that content and map it to the CHILDREN and IMAGES
+2. ALWAYS check the "ALL IMAGES IN THIS ELEMENT" section - these are the actual img tags to modify
+3. For wrappers with text and images, create MULTIPLE targeted changes:
+   - One change for each text element (action: "text")
+   - One change for EACH image (action: "attribute" with attribute: "src")
+4. Use the selectors from "ALL IMAGES" section for image changes - these are guaranteed to work
+5. If user mentions content from a URL:
+   - Extract/infer text content → map to text elements
+   - Extract/infer image URLs → map to [IMG-1], [IMG-2], etc.
+6. Each image must have its OWN change object - do NOT skip images
+7. Look at both CHILDREN and ALL IMAGES sections to understand full structure
+8. Example: If there are 4 images in ALL IMAGES section, create 4 separate attribute changes
+9. **CRITICAL**: Keep ALL explanations SHORT (max 10 words) to prevent truncation
+10. Focus on accuracy over verbose descriptions
 
 ────────────────────────────
 OUTPUT FORMAT (STRICT JSON)
@@ -348,14 +414,15 @@ You MUST respond with this EXACT JSON structure wrapped in a code block:
 \`\`\`json
 {
   "success": true,
-  "explanation": "Brief summary of what you're doing and why",
+  "explanation": "Brief summary (max 1 sentence)",
   "changes": [
     {
       "id": "change-1",
       "action": "css|html|text|attribute|remove|insert",
-      "selector": "CSS selector targeting elements",
+      "selector": "CSS selector from CHILDREN list above",
       "value": "The new value to apply",
-      "explanation": "Why this specific change"
+      "attribute": "attribute name (required for action: 'attribute')",
+      "explanation": "Short reason (max 10 words)"
     }
   ],
   "warnings": ["Any potential issues (optional)"],
@@ -372,13 +439,12 @@ ACTION TYPES & EXAMPLES
 {
   "id": "change-1",
   "action": "css",
-  "selector": "h1, h2, h3",
+  "selector": "h1",
   "value": {
     "color": "#1a365d",
-    "font-family": "'Inter', sans-serif",
-    "font-weight": "700"
+    "font-family": "'Inter', sans-serif"
   },
-  "explanation": "Updating heading colors for brand consistency"
+  "explanation": "Updating heading style"
 }
 \`\`\`
 
@@ -387,32 +453,21 @@ ACTION TYPES & EXAMPLES
 {
   "id": "change-2",
   "action": "text",
-  "selector": ".hero-title",
-  "value": "Welcome to Our New Site",
-  "explanation": "Updating hero title text"
-}
-\`\`\`
-
-### html - Replace HTML content
-\`\`\`json
-{
-  "id": "change-3",
-  "action": "html",
-  "selector": ".card-container",
-  "value": "<div class='card'>New Card Content</div>",
-  "explanation": "Restructuring card layout"
+  "selector": "[data-id='abc123'] > p",
+  "value": "Revolutionary AI platform for modern teams",
+  "explanation": "Updating description text"
 }
 \`\`\`
 
 ### attribute - Modify element attributes
 \`\`\`json
 {
-  "id": "change-4",
+  "id": "change-3",
   "action": "attribute",
   "selector": "img.hero-image",
   "attribute": "src",
-  "value": "https://example.com/new-image.jpg",
-  "explanation": "Updating hero image"
+  "value": "https://example.com/new-hero.jpg",
+  "explanation": "Replacing hero image"
 }
 \`\`\`
 
@@ -421,10 +476,10 @@ IMPORTANT RULES
 ────────────────────────────
 1. ALWAYS output valid JSON inside \`\`\`json code block
 2. ALWAYS include explanation for overall change and each individual change
-3. Use specific CSS selectors (prefer classes, data-attributes, IDs)
-4. For multiple similar changes, use comma-separated selectors
+3. Use specific selectors from the CHILDREN list provided above
+4. For wrapper with multiple elements (text + image), create SEPARATE changes for each
 5. Estimate impact: low (styling), medium (content), high (structure)
-6. User will see a preview and can apply changes individually
+6. DO NOT combine multiple element changes into one change object
 
 Use context7 for reasoning and best practices.`,
             },
@@ -437,6 +492,10 @@ Use context7 for reasoning and best practices.`,
               content: input,
             },
           ],
+          options: {
+            maxTokens: model.includes('2.5') || model.includes('2.0') ? 8192 : 4096,
+            temperature: 0.7,
+          },
         },
       });
 
@@ -444,12 +503,27 @@ Use context7 for reasoning and best practices.`,
         // Parse AI response for actionable changes
         const aiContent = response.data.content;
         
+        console.log('[AI Chat] Received AI response, length:', aiContent.length);
+        console.log('[AI Chat] Response preview:', aiContent.substring(0, 300));
+        
+        // Check if response was truncated
+        let truncationWarning = '';
+        if (response.data.usage && response.data.usage.totalTokens) {
+          const usage = response.data.usage;
+          // Check for signs of truncation
+          if (usage.completionTokens && usage.completionTokens < 100) {
+            truncationWarning = '\n\n⚠️ Warning: Response may be incomplete (very short output). Try using a non-experimental model.';
+          }
+        }
+        
         // Try to parse structured response first (new format)
         const revampResponse = AIResponseParser.parse(aiContent);
         
         // Fallback: Try legacy single-action format
         let legacyAction;
         if (!revampResponse) {
+          console.warn('[AI Chat] Structured parsing failed, trying legacy format');
+          
           const patterns = [
             /```json\s*\n?([\s\S]*?)\n?```/,
             /```\s*\n?(\{[\s\S]*?\})\s*\n?```/,
@@ -473,12 +547,18 @@ Use context7 for reasoning and best practices.`,
               }
             }
           }
+          
+          // If still no valid format found, log warning
+          if (!legacyAction) {
+            console.warn('[AI Chat] No actionable changes found in AI response');
+            console.warn('[AI Chat] AI may have responded with explanation only, or JSON was malformed');
+          }
         }
 
         const assistantMessage: Message = {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
-          content: aiContent,
+          content: aiContent + truncationWarning,
           timestamp: Date.now(),
           action: legacyAction,
           revampResponse: revampResponse || undefined,

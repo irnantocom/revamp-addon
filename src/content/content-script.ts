@@ -8,6 +8,7 @@ import { HighlightOverlay } from '../utils/highlight-overlay';
 import { AIResponseParser } from '../utils/ai-response-parser';
 import { changeManager } from '../utils/change-manager';
 import { AIRevampResponse, AIChange } from '../types/ai-response';
+import { SubtreeSnapshot, ChildSummary, ElementAttribute } from '../types/dom-snapshot';
 
 interface InspectedElement {
   selector: SelectorInfo;
@@ -165,6 +166,10 @@ class RevampInspector {
           const html = this.getPageHTML();
           sendResponse({ success: true, data: html });
           break;
+
+        case 'GET_SUBTREE_SNAPSHOT':
+          this.getSubtreeSnapshot(message.selector).then(sendResponse);
+          return true; // Keep channel open for async
 
         default:
           sendResponse({ success: false, error: 'Unknown command' });
@@ -985,6 +990,194 @@ class RevampInspector {
       } : null,
       rect: element.getBoundingClientRect(),
     };
+  }
+
+  /**
+   * Build stable selector for element using data attributes, ID, classes, or nth-of-type
+   */
+  private buildStableSelector(el: Element): string {
+    if (!el || !(el instanceof Element)) return '';
+
+    // Prefer data-* attributes for stability
+    const dataAttrs = ['data-testid', 'data-test', 'data-id', 'data-qa', 'data-cy', 'data-component'];
+    for (const attr of dataAttrs) {
+      const value = el.getAttribute(attr);
+      if (value) {
+        return `[${attr}="${CSS.escape(value)}"]`;
+      }
+    }
+
+    // Try ID
+    if (el.id) {
+      return `#${CSS.escape(el.id)}`;
+    }
+
+    // Try classes (limit to 3)
+    const classes = Array.from(el.classList).slice(0, 3);
+    if (classes.length > 0) {
+      const classSelector = classes.map(c => `.${CSS.escape(c)}`).join('');
+      return `${el.tagName.toLowerCase()}${classSelector}`;
+    }
+
+    // Fallback to tag + nth-of-type
+    const parent = el.parentElement;
+    if (parent) {
+      const siblings = Array.from(parent.children).filter(c => c.tagName === el.tagName);
+      const index = siblings.indexOf(el) + 1;
+      const parentSelector = this.buildStableSelector(parent);
+      const nthSelector = `${el.tagName.toLowerCase()}:nth-of-type(${index})`;
+      return parentSelector ? `${parentSelector} > ${nthSelector}` : nthSelector;
+    }
+
+    return el.tagName.toLowerCase();
+  }
+
+  /**
+   * Trim text to max length
+   */
+  private trimText(text: string, maxLength = 2000): string {
+    if (!text) return '';
+    const trimmed = text.replace(/\s+/g, ' ').trim();
+    return trimmed.length > maxLength ? trimmed.substring(0, maxLength) + '…' : trimmed;
+  }
+
+  /**
+   * Trim HTML to max length
+   */
+  private trimHTML(html: string, maxLength = 20000): string {
+    if (!html) return '';
+    return html.length > maxLength ? html.substring(0, maxLength) + '\n<!-- truncated -->' : html;
+  }
+
+  /**
+   * Check if element is visible
+   */
+  private isElementVisible(el: Element): boolean {
+    if (!(el instanceof HTMLElement)) return false;
+    const style = window.getComputedStyle(el);
+    return style.display !== 'none' && 
+           style.visibility !== 'hidden' && 
+           style.opacity !== '0' &&
+           el.offsetWidth > 0 &&
+           el.offsetHeight > 0;
+  }
+
+  /**
+   * Summarize a child element
+   */
+  private summarizeChild(el: Element): ChildSummary {
+    const tag = el.tagName.toLowerCase();
+    const selector = this.buildStableSelector(el);
+    const id = (el as HTMLElement).id || undefined;
+    const classes = Array.from(el.classList);
+    
+    const attributes: ElementAttribute[] = Array.from(el.attributes).map(attr => ({
+      name: attr.name,
+      value: attr.value
+    }));
+
+    const textContent = this.trimText((el as HTMLElement).textContent || '', 300);
+    
+    // Extract src/href for media and links
+    let src: string | undefined;
+    let href: string | undefined;
+    
+    if (tag === 'img' || tag === 'video' || tag === 'source' || tag === 'audio') {
+      src = (el as HTMLImageElement).src || 
+            (el as HTMLVideoElement).src || 
+            (el as HTMLSourceElement).src ||
+            el.getAttribute('src') || undefined;
+    }
+    
+    if (tag === 'a') {
+      href = (el as HTMLAnchorElement).href || el.getAttribute('href') || undefined;
+    }
+
+    return {
+      tag,
+      selector,
+      id,
+      classes,
+      attributes,
+      textContent,
+      src,
+      href,
+      isVisible: this.isElementVisible(el)
+    };
+  }
+
+  /**
+   * Capture subtree snapshot of selected element or body
+   */
+  async getSubtreeSnapshot(selector?: string): Promise<{ success: boolean; snapshot?: SubtreeSnapshot; error?: string }> {
+    try {
+      // Determine target element
+      const targetElement = selector 
+        ? document.querySelector(selector) 
+        : (this.selectedElement || document.body);
+
+      if (!targetElement) {
+        return { 
+          success: false, 
+          error: selector ? `Element not found: ${selector}` : 'No element selected and body not found' 
+        };
+      }
+
+      const rootSelector = selector || (this.selectedElement ? this.buildStableSelector(this.selectedElement) : 'body');
+      const mode = targetElement === document.body ? 'page' : 'element';
+
+      // Collect attributes
+      const attributes: ElementAttribute[] = Array.from(targetElement.attributes).map(attr => ({
+        name: attr.name,
+        value: attr.value
+      }));
+
+      // Get HTML content (trimmed)
+      const outerHTML = this.trimHTML((targetElement as HTMLElement).outerHTML || '');
+      const innerHTML = this.trimHTML((targetElement as HTMLElement).innerHTML || '');
+      const textContent = this.trimText((targetElement as HTMLElement).textContent || '');
+
+      // Summarize direct children
+      const children: ChildSummary[] = Array.from(targetElement.children).map(child => 
+        this.summarizeChild(child)
+      );
+
+      // IMPORTANT: Also collect ALL images recursively (not just direct children)
+      // This ensures images nested deep in structure are captured
+      const allImages = Array.from(targetElement.querySelectorAll('img')).map(img => 
+        this.summarizeChild(img)
+      );
+
+      const snapshot: SubtreeSnapshot = {
+        mode,
+        rootSelector,
+        rootTag: targetElement.tagName.toLowerCase(),
+        attributes,
+        outerHTML,
+        innerHTML,
+        textContent,
+        children,
+        totalChildCount: targetElement.children.length,
+        timestamp: Date.now(),
+        // Add all images as separate property
+        allImages
+      };
+
+      console.log('[Content] Subtree snapshot captured:', {
+        mode,
+        rootSelector,
+        childCount: children.length
+      });
+
+      return { success: true, snapshot };
+
+    } catch (error) {
+      console.error('[Content] Error capturing subtree snapshot:', error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error capturing snapshot' 
+      };
+    }
   }
 }
 

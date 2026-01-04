@@ -186,13 +186,18 @@ async function handleAIRequest(
         data: response,
       });
     } else {
+      console.error(`[Background] ${payload.provider} request failed:`, response.error);
       sendResponse({
         success: false,
-        error: response.error,
+        error: response.error || 'AI request failed',
       });
     }
   } catch (error) {
-    sendResponse({ success: false, error: String(error) });
+    console.error('[Background] AI request error:', error);
+    sendResponse({ 
+      success: false, 
+      error: `Error: ${error instanceof Error ? error.message : String(error)}. Please check your API key in Settings.`
+    });
   }
 }
 
@@ -333,7 +338,7 @@ async function fetchGeminiModels(apiKey: string): Promise<string[]> {
         return a.localeCompare(b);
       });
 
-    return geminiModels.length > 0 ? geminiModels.slice(0, 10) : getDefaultModels('gemini');
+    return geminiModels.length > 0 ? geminiModels : getDefaultModels('gemini');
   } catch {
     return getDefaultModels('gemini');
   }

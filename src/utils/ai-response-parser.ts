@@ -11,9 +11,13 @@ export class AIResponseParser {
    */
   static parse(rawResponse: string): AIRevampResponse | null {
     try {
+      // Log first 500 chars for debugging
+      console.log('[Parser] Attempting to parse response (first 500 chars):', rawResponse.substring(0, 500));
+      
       // Pattern 1: ```json ... ```
       const jsonBlockMatch = rawResponse.match(/```json\s*([\s\S]*?)\s*```/);
       if (jsonBlockMatch) {
+        console.log('[Parser] Found JSON code block with ```json marker');
         return this.validateAndParse(jsonBlockMatch[1]);
       }
 
@@ -22,6 +26,7 @@ export class AIResponseParser {
       if (codeBlockMatch) {
         const content = codeBlockMatch[1].trim();
         if (content.startsWith('{')) {
+          console.log('[Parser] Found code block with JSON content');
           return this.validateAndParse(content);
         }
       }
@@ -29,20 +34,24 @@ export class AIResponseParser {
       // Pattern 3: Direct JSON object
       const directJsonMatch = rawResponse.match(/\{[\s\S]*"changes"[\s\S]*\}/);
       if (directJsonMatch) {
+        console.log('[Parser] Found direct JSON object');
         return this.validateAndParse(directJsonMatch[0]);
       }
 
       // Pattern 4: Legacy single action format (backward compatibility)
       const legacyMatch = rawResponse.match(/\{\s*"action"\s*:/);
       if (legacyMatch) {
+        console.log('[Parser] Found legacy single action format');
         return this.parseLegacyFormat(rawResponse);
       }
 
-      console.warn('[Parser] No valid JSON structure found');
+      console.warn('[Parser] No valid JSON structure found in response');
+      console.warn('[Parser] Response preview:', rawResponse.substring(0, 1000));
       return null;
 
     } catch (error) {
       console.error('[Parser] Failed to parse AI response:', error);
+      console.error('[Parser] Response was:', rawResponse.substring(0, 500));
       return null;
     }
   }
@@ -62,14 +71,25 @@ export class AIResponseParser {
         .replace(/[\u200B-\u200D\uFEFF]/g, '')
         .trim();
 
-      // Step 2: Fix common structural issues
+      // Step 2: Aggressive trailing comma removal
+      // This handles commas before }, ], or end of line that precedes closing bracket
       cleaned = cleaned
-        // Remove trailing commas before closing braces/brackets
+        // Remove trailing commas before } or ]
         .replace(/,(\s*[}\]])/g, '$1')
+        // Remove trailing comma at end of line (common AI mistake)
+        .replace(/,(\s*\n\s*[}\]])/g, '$1')
+        // Remove trailing comma after string values
+        .replace(/("(?:[^"\\]|\\.)*"),(\s*\n?\s*[}\]])/g, '$1$2')
         // Fix multiple consecutive commas
         .replace(/,+/g, ',')
-        // Remove trailing comma at end
+        // Remove trailing comma at very end
         .replace(/,\s*$/, '');
+
+      // Step 2.5: Fix truncated URLs FIRST (before string value fixes)
+      // This must run early because control characters cause parse errors
+      const urlFixResult = this.fixTruncatedUrls(cleaned);
+      cleaned = urlFixResult.fixed;
+      const truncatedChangeIds = urlFixResult.truncatedIds;
 
       // Step 3: Try to parse with progressive fixes
       let parsed;
@@ -79,14 +99,19 @@ export class AIResponseParser {
         parsed = JSON.parse(cleaned);
       } catch (firstError) {
         console.warn('[Parser] First attempt failed, applying string fixes');
+        console.warn('[Parser] Error was:', firstError);
         
         // Attempt 2: Fix string values with unescaped characters
         cleaned = this.fixStringValues(cleaned);
+        
+        // Extra aggressive trailing comma removal after string fixes
+        cleaned = cleaned.replace(/,(\s*\n?\s*[}\]])/g, '$1');
         
         try {
           parsed = JSON.parse(cleaned);
         } catch (secondError) {
           console.warn('[Parser] Second attempt failed, trying truncation recovery');
+          console.warn('[Parser] Error was:', secondError);
           
           // Attempt 3: Try to find and fix truncated JSON
           cleaned = this.recoverTruncatedJson(cleaned);
@@ -95,6 +120,7 @@ export class AIResponseParser {
             parsed = JSON.parse(cleaned);
           } catch (thirdError) {
             console.error('[Parser] All parse attempts failed');
+            console.error('[Parser] Final cleaned JSON (first 1000 chars):', cleaned.substring(0, 1000));
             throw thirdError;
           }
         }
@@ -108,7 +134,27 @@ export class AIResponseParser {
 
       // Ensure each change has required fields
       const validatedChanges: AIChange[] = parsed.changes
-        .filter((change: any) => change.action && change.selector)
+        .filter((change: any) => {
+          // Only filter out changes with severely truncated URLs (protocol only)
+          if (truncatedChangeIds.includes(change.id)) {
+            console.warn(`[Parser] Skipping change "${change.id}" - URL severely truncated (protocol only)`);
+            return false;
+          }
+          
+          // Filter out changes with placeholder URLs
+          if (change.value === 'https://placeholder.invalid') {
+            console.warn(`[Parser] Skipping change "${change.id}" - contains placeholder URL`);
+            return false;
+          }
+          
+          // Ensure minimum required fields
+          if (!change.action || !change.selector) {
+            console.warn(`[Parser] Skipping change "${change.id}" - missing action or selector`);
+            return false;
+          }
+          
+          return true;
+        })
         .map((change: any, index: number) => ({
           id: change.id || `change-${Date.now()}-${index}`,
           action: change.action,
@@ -121,15 +167,23 @@ export class AIResponseParser {
         }));
 
       if (validatedChanges.length === 0) {
-        console.warn('[Parser] No valid changes found');
+        console.warn('[Parser] No valid changes found after filtering');
         return null;
+      }
+
+      const skippedCount = parsed.changes.length - validatedChanges.length;
+      const warnings = parsed.warnings || [];
+      
+      if (skippedCount > 0) {
+        warnings.push(`${skippedCount} change(s) skipped due to severely truncated URLs (protocol only). Other partial URLs are kept and may still work.`);
+        console.warn(`[Parser] Skipped ${skippedCount} changes with severely truncated data`);
       }
 
       return {
         success: parsed.success !== false,
         explanation: parsed.explanation || 'AI suggested the following changes',
         changes: validatedChanges,
-        warnings: parsed.warnings || [],
+        warnings,
         estimatedImpact: parsed.estimatedImpact || 'medium'
       };
 
@@ -179,15 +233,79 @@ export class AIResponseParser {
   }
 
   /**
+   * Fix truncated URLs in JSON (common with MAX_TOKENS)
+   * Pattern: "value": "https://very-long-url (no closing quote)
+   * Returns: [fixed JSON string, array of severely truncated change IDs]
+   */
+  private static fixTruncatedUrls(jsonString: string): { fixed: string; truncatedIds: string[] } {
+    console.log('[Parser] Checking for truncated URLs');
+    
+    let result = jsonString;
+    const truncatedIds: string[] = [];
+    let foundTruncated = false;
+    
+    // Pattern 1: VERY short truncated URLs like "https:\n or "http:\n (ONLY protocol)
+    // These are severely truncated - mark for removal
+    const veryShortUrlPattern = /"id":\s*"([^"]+)"[^}]*?"(value|src|href)":\s*"(https?:)[^\w"]*\n/g;
+    let match;
+    while ((match = veryShortUrlPattern.exec(jsonString)) !== null) {
+      const changeId = match[1];
+      console.log(`[Parser] Found severely truncated URL in change "${changeId}" (only protocol) - will skip`);
+      truncatedIds.push(changeId);
+      foundTruncated = true;
+    }
+    
+    // Fix syntax for very short URLs (close string properly)
+    result = result.replace(/"(value|src|href)":\s*"(https?:)[^\w"]*\n/g, '"$1": "https://placeholder.invalid",\n');
+    
+    // Pattern 2: URL ending abruptly (no closing quote at end of string)
+    // Keep partial URL as-is - might still be useful
+    const endUrlPattern = /"(value|src|href)":\s*"(https?:\/\/[^"\n]*?)$/gm;
+    result = result.replace(endUrlPattern, (_match, prop, url) => {
+      console.log(`[Parser] Fixed incomplete URL in "${prop}":`, url.substring(0, 60), '(keeping partial URL)');
+      foundTruncated = true;
+      return `"${prop}": "${url}"`;
+    });
+    
+    // Pattern 3: URL with newline in middle (control character issue)
+    // Keep partial URL - don't add markers
+    const newlineUrlPattern = /"(value|src|href)":\s*"(https?:\/\/[^"\n]*?)\n\s*"(\w+)":/g;
+    result = result.replace(newlineUrlPattern, (_match, prop, url, nextProp) => {
+      console.log(`[Parser] Fixed URL with newline in "${prop}" (keeping partial URL)`);
+      foundTruncated = true;
+      return `"${prop}": "${url}",\n      "${nextProp}":`;
+    });
+    
+    // Pattern 4: URL followed by unescaped newline and property name
+    const controlCharPattern = /"(value|src|href)":\s*"([^"]*?)\n\s+"(\w+)":/g;
+    result = result.replace(controlCharPattern, (_match, prop, partialUrl, nextProp) => {
+      console.log(`[Parser] Fixed control char in "${prop}"`);
+      foundTruncated = true;
+      // Only use placeholder if URL is VERY short (just protocol)
+      const fixedUrl = partialUrl.match(/^https?:$/) ? 'https://placeholder.invalid' : partialUrl;
+      return `"${prop}": "${fixedUrl}",\n      "${nextProp}":`;
+    });
+    
+    if (foundTruncated) {
+      console.log('[Parser] ✓ Fixed URL syntax issues, marked', truncatedIds.length, 'severely truncated for removal');
+    }
+    
+    return { fixed: result, truncatedIds };
+  }
+
+  /**
    * Attempt to recover truncated or malformed JSON
    */
   private static recoverTruncatedJson(jsonString: string): string {
+    console.log('[Parser] Attempting recovery for truncated JSON');
+    
     // Try to find where JSON becomes invalid and truncate there
     let braceCount = 0;
     let bracketCount = 0;
     let inString = false;
     let escapeNext = false;
     let lastValidPos = jsonString.length;
+    let lastStringStart = -1;
     
     for (let i = 0; i < jsonString.length; i++) {
       const char = jsonString[i];
@@ -203,7 +321,13 @@ export class AIResponseParser {
       }
       
       if (char === '"') {
-        inString = !inString;
+        if (inString) {
+          inString = false;
+          lastStringStart = -1;
+        } else {
+          inString = true;
+          lastStringStart = i;
+        }
         continue;
       }
       
@@ -225,26 +349,100 @@ export class AIResponseParser {
       }
     }
     
-    // If we're in an incomplete string, try to close it
-    if (inString) {
-      // Find the last complete change object
-      const lastChangeEnd = jsonString.lastIndexOf('}', lastValidPos);
-      if (lastChangeEnd > 0) {
-        let truncated = jsonString.substring(0, lastChangeEnd + 1);
+    // If we're in an incomplete string, close it and truncate
+    if (inString && lastStringStart > 0) {
+      console.log('[Parser] Found incomplete string at position', lastStringStart);
+      
+      // Find the last comma before this incomplete string
+      let truncatePos = lastStringStart;
+      while (truncatePos > 0 && jsonString[truncatePos] !== ',') {
+        truncatePos--;
+      }
+      
+      // If we found a comma, truncate there
+      if (truncatePos > 0) {
+        let result = jsonString.substring(0, truncatePos);
+        console.log('[Parser] Truncating at comma position', truncatePos);
         
         // Close the changes array if needed
         if (bracketCount > 0) {
-          truncated += '\n]';
+          result += '\n]';
           bracketCount--;
         }
         
         // Close the main object if needed
         while (braceCount > 0) {
-          truncated += '\n}';
+          result += '\n}';
           braceCount--;
         }
         
-        return truncated;
+        return result;
+      }
+    }
+    
+    // NEW: Handle truncation in middle of property name or value (no string open)
+    // This happens when response ends abruptly like: "action
+    if (!inString && jsonString.length > 10) {
+      console.log('[Parser] Truncated outside string context');
+      
+      // Find last complete object (last '}' or ']')
+      const lastObjectEnd = Math.max(
+        jsonString.lastIndexOf('}'),
+        jsonString.lastIndexOf(']')
+      );
+      
+      if (lastObjectEnd > 0) {
+        // Check if this is inside changes array
+        const beforeLastObject = jsonString.substring(0, lastObjectEnd + 1);
+        const commaAfterObject = jsonString.indexOf(',', lastObjectEnd);
+        
+        // If there's a comma after last complete object, we're in middle of next object
+        // Truncate at the last complete object
+        if (commaAfterObject > lastObjectEnd || jsonString.substring(lastObjectEnd + 1).includes('{')) {
+          let result = beforeLastObject;
+          console.log('[Parser] Truncating after last complete object at position', lastObjectEnd);
+          
+          // Recount braces/brackets in truncated string
+          let newBraceCount = 0;
+          let newBracketCount = 0;
+          let stringOpen = false;
+          let escaped = false;
+          
+          for (let i = 0; i < result.length; i++) {
+            const c = result[i];
+            if (escaped) {
+              escaped = false;
+              continue;
+            }
+            if (c === '\\') {
+              escaped = true;
+              continue;
+            }
+            if (c === '"') {
+              stringOpen = !stringOpen;
+              continue;
+            }
+            if (!stringOpen) {
+              if (c === '{') newBraceCount++;
+              if (c === '}') newBraceCount--;
+              if (c === '[') newBracketCount++;
+              if (c === ']') newBracketCount--;
+            }
+          }
+          
+          // Close arrays and objects as needed
+          while (newBracketCount > 0) {
+            result += '\n]';
+            newBracketCount--;
+          }
+          
+          while (newBraceCount > 0) {
+            result += '\n}';
+            newBraceCount--;
+          }
+          
+          return result;
+        }
       }
     }
     
