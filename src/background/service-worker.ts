@@ -307,7 +307,7 @@ async function fetchOpenAIModels(apiKey: string): Promise<string[]> {
         return a.localeCompare(b);
       });
 
-    return gptModels.length > 0 ? gptModels.slice(0, 10) : getDefaultModels('openai');
+    return gptModels.length > 0 ? gptModels : getDefaultModels('openai');
   } catch {
     return getDefaultModels('openai');
   }

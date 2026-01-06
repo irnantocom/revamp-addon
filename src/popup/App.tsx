@@ -4,20 +4,9 @@ import ElementEditor from './components/ElementEditor';
 import ExportPanel from './components/ExportPanel';
 import AIChatBox from './components/AIChatBox';
 import Settings from './components/Settings';
+import { InspectedElement } from '../types/inspector';
 
 type Tab = 'inspector' | 'editor' | 'ai' | 'export' | 'settings';
-
-interface InspectedElement {
-  selector: {
-    selector: string;
-    type: string;
-    confidence: string;
-  };
-  tagName: string;
-  attributes: Record<string, string>;
-  textContent: string;
-  innerHTML: string;
-}
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('inspector');

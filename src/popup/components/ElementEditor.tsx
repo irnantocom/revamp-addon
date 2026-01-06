@@ -1,16 +1,5 @@
 import React, { useState, useEffect } from 'react';
-
-interface InspectedElement {
-  selector: {
-    selector: string;
-    type: string;
-    confidence: string;
-  };
-  tagName: string;
-  attributes: Record<string, string>;
-  textContent: string;
-  innerHTML: string;
-}
+import { InspectedElement } from '../../types/inspector';
 
 interface Props {
   element: InspectedElement | null;

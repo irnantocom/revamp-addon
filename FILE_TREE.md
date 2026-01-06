@@ -29,11 +29,28 @@ revamp-addon/
 │   │   └── 📁 components/
 │   │       ├── Inspector.tsx           # Inspector controls UI
 │   │       ├── ElementEditor.tsx       # Element editing UI
+│   │       ├── AIChatBox.tsx           # AI chat interface
+│   │       ├── ChangePreview.tsx       # Change preview component
+│   │       ├── Settings.tsx            # Settings UI
 │   │       └── ExportPanel.tsx         # Export controls UI
+│   │
+│   ├── 📁 types/                       # TypeScript type definitions
+│   │   ├── index.ts                    # Barrel export for all types
+│   │   ├── inspector.ts                # Inspector & editor types
+│   │   ├── ai-response.ts              # AI response types
+│   │   └── dom-snapshot.ts             # DOM snapshot types
+│   │
+│   ├── 📁 ai/                          # AI provider adapters
+│   │   ├── provider-interface.ts       # Provider interface
+│   │   ├── openai-provider.ts          # OpenAI implementation
+│   │   ├── gemini-provider.ts          # Google Gemini implementation
+│   │   └── claude-provider.ts          # Anthropic Claude implementation
 │   │
 │   └── 📁 utils/                       # Shared utilities
 │       ├── selector-generator.ts       # Selector generation logic
-│       └── highlight-overlay.ts        # Visual overlay system
+│       ├── highlight-overlay.ts        # Visual overlay system
+│       ├── change-manager.ts           # Change tracking & management
+│       └── ai-response-parser.ts       # AI response parsing
 │
 ├── 📁 dist/                            # Build output (generated, not in repo)
 │   ├── manifest.json

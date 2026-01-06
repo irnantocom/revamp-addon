@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AIResponseParser } from '../../utils/ai-response-parser';
 import { AIRevampResponse, AIChange } from '../../types/ai-response';
 import { SubtreeSnapshot } from '../../types/dom-snapshot';
+import { InspectedElement } from '../../types/inspector';
 import ChangePreview from './ChangePreview';
 
 // Helper to ensure content script is ready
@@ -100,11 +101,7 @@ interface Message {
 }
 
 interface Props {
-  selectedElement?: {
-    selector: { selector: string; type: string };
-    tagName: string;
-    textContent: string;
-  } | null;
+  selectedElement?: InspectedElement | null;
   onClear?: () => void;
 }
 

@@ -9,29 +9,12 @@ import { AIResponseParser } from '../utils/ai-response-parser';
 import { changeManager } from '../utils/change-manager';
 import { AIRevampResponse, AIChange } from '../types/ai-response';
 import { SubtreeSnapshot, ChildSummary, ElementAttribute } from '../types/dom-snapshot';
-
-interface InspectedElement {
-  selector: SelectorInfo;
-  tagName: string;
-  attributes: Record<string, string>;
-  textContent: string;
-  innerHTML: string;
-  rect: DOMRect;
-}
-
-interface EditOperation {
-  selector: SelectorInfo;
-  type: 'text' | 'html' | 'attribute' | 'style';
-  value: any;
-  originalValue?: any;
-}
-
-interface ApplyChangePayload {
-  action: 'text' | 'css' | 'html' | 'attribute' | 'script';
-  selector: SelectorInfo;
-  value: any;
-  attribute?: string;
-}
+import {
+  InspectedElement,
+  EditOperation,
+  ApplyChangePayload,
+  MessageResponse,
+} from '../types/inspector';
 
 interface ApplyRevampPayload {
   rawResponse?: string;
@@ -1179,12 +1162,6 @@ class RevampInspector {
       };
     }
   }
-}
-
-interface MessageResponse {
-  success: boolean;
-  data?: any;
-  error?: string;
 }
 
 // Initialize inspector (instantiation has side effects - sets up message listeners)
