@@ -63,14 +63,17 @@ export class AIResponseParser {
     try {
       // Step 1: Basic cleanup
       let cleaned = jsonString
-        // Remove comments
-        .replace(/\/\/.*$/gm, '')
-        .replace(/\/\*[\s\S]*?\*\//g, '')
-        // Remove BOM and zero-width characters
+        // Remove BOM and zero-width characters first
         .replace(/^\uFEFF/, '')
         .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        // Remove block comments (/* ... */)
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        // Remove line comments (//) but ONLY if not preceded by : or http/https
+        // This preserves URLs like "https://example.com" while removing actual comments
+        .replace(/(?<!:)\/\/(?!\/)[^\n]*/g, '')
         .trim();
-
+      // console.log(jsonString);
+      // console.log('[Parser] Cleaned JSON string :', cleaned);
       // Step 2: Aggressive trailing comma removal
       // This handles commas before }, ], or end of line that precedes closing bracket
       cleaned = cleaned
@@ -84,10 +87,11 @@ export class AIResponseParser {
         .replace(/,+/g, ',')
         // Remove trailing comma at very end
         .replace(/,\s*$/, '');
-
+      // console.log('[Parser] Cleaned JSON string :', cleaned);
       // Step 2.5: Fix truncated URLs FIRST (before string value fixes)
       // This must run early because control characters cause parse errors
       const urlFixResult = this.fixTruncatedUrls(cleaned);
+      //console.log('urlFixResult:', urlFixResult);
       cleaned = urlFixResult.fixed;
       const truncatedChangeIds = urlFixResult.truncatedIds;
 
@@ -131,7 +135,7 @@ export class AIResponseParser {
         console.warn('[Parser] Missing or invalid "changes" array');
         return null;
       }
-
+      // console.log(parsed.changes);
       // Ensure each change has required fields
       const validatedChanges: AIChange[] = parsed.changes
         .filter((change: any) => {
@@ -246,7 +250,8 @@ export class AIResponseParser {
     
     // Pattern 1: VERY short truncated URLs like "https:\n or "http:\n (ONLY protocol)
     // These are severely truncated - mark for removal
-    const veryShortUrlPattern = /"id":\s*"([^"]+)"[^}]*?"(value|src|href)":\s*"(https?:)[^\w"]*\n/g;
+    // IMPORTANT: Only match if protocol is NOT followed by // (which means URL continues)
+    const veryShortUrlPattern = /"id":\s*"([^"]+)"[^}]*?"(value|src|href)":\s*"(https?:)(?!\/\/)[\s"',\n]/g;
     let match;
     while ((match = veryShortUrlPattern.exec(jsonString)) !== null) {
       const changeId = match[1];
@@ -256,7 +261,9 @@ export class AIResponseParser {
     }
     
     // Fix syntax for very short URLs (close string properly)
-    result = result.replace(/"(value|src|href)":\s*"(https?:)[^\w"]*\n/g, '"$1": "https://placeholder.invalid",\n');
+    // Only fix if protocol is NOT followed by //
+    // console.log(result);
+    result = result.replace(/"(value|src|href)":\s*"(https?:)(?!\/\/)[\s"',\n]/g, '"$1": "https://placeholder.invalid",\n');
     
     // Pattern 2: URL ending abruptly (no closing quote at end of string)
     // Keep partial URL as-is - might still be useful
@@ -282,7 +289,9 @@ export class AIResponseParser {
       console.log(`[Parser] Fixed control char in "${prop}"`);
       foundTruncated = true;
       // Only use placeholder if URL is VERY short (just protocol)
+      // console.log('[Parser] Partial URL was:', partialUrl);
       const fixedUrl = partialUrl.match(/^https?:$/) ? 'https://placeholder.invalid' : partialUrl;
+      // console.log('[Parser] Using fixed URL:', fixedUrl);
       return `"${prop}": "${fixedUrl}",\n      "${nextProp}":`;
     });
     
