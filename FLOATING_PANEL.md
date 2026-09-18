@@ -91,12 +91,17 @@ class RevampInspector {
 - User bisa reposition ke mana saja
 - Cursor: `move` on drag handle
 
-### ✅ Resizable Position
+### ✅ Resizable (corner drag)
+- Resize handle di pojok kanan-bawah panel
+- Drag untuk mengubah width & height (min 320x300)
+- Ukuran tersimpan di localStorage, dipakai lagi saat panel dibuka
+
+### Default Position & Size
 ```javascript
 Top: 80px (default)
 Right: 20px (default)
-Width: 420px (fixed)
-Height: 600px (fixed)
+Width: 420px (default, resizable)
+Height: 600px (default, resizable)
 Z-index: 2147483647 (maximum)
 ```
 
@@ -224,8 +229,6 @@ Panel open: ~15 MB (React app + iframe)
 
 ## 🔮 Future Enhancements
 
-- [ ] Resize handle (corner drag)
-- [ ] Remember position (localStorage)
 - [ ] Minimize/maximize button
 - [ ] Snap to edges
 - [ ] Keyboard shortcuts (Ctrl+Shift+E)

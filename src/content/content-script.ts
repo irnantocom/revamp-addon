@@ -217,8 +217,9 @@ class RevampInspector {
   private createFloatingPanel(): void {
     if (this.panelElement) return;
 
-    // Load saved position from localStorage
+    // Load saved position/size from localStorage
     const savedPos = this.loadPanelPosition();
+    const savedSize = this.loadPanelSize();
 
     // Create container
     const container = document.createElement('div');
@@ -227,8 +228,8 @@ class RevampInspector {
       position: fixed;
       ${savedPos.x !== null ? `left: ${savedPos.x}px;` : 'right: 20px;'}
       ${savedPos.y !== null ? `top: ${savedPos.y}px;` : 'top: 80px;'}
-      width: 420px;
-      height: 600px;
+      width: ${savedSize.width ?? 420}px;
+      height: ${savedSize.height ?? 600}px;
       z-index: 2147483647;
       box-shadow: 0 10px 40px rgba(0,0,0,0.3);
       border-radius: 8px;
@@ -315,12 +316,36 @@ class RevampInspector {
 
     this.panelElement = iframe;
 
+    // Create resize handle (bottom-right corner)
+    const resizeHandle = document.createElement('div');
+    resizeHandle.classList.add('revamp-resize-handle');
+    resizeHandle.style.cssText = `
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      width: 16px;
+      height: 16px;
+      cursor: nwse-resize;
+      background: linear-gradient(135deg, transparent 50%, #9ca3af 50%);
+      border-bottom-right-radius: 8px;
+      z-index: 10;
+    `;
+    container.appendChild(resizeHandle);
+
     // Make draggable with professional logic
     this.makeDraggable(container, dragHandle);
 
-    // Prevent clicks on panel from triggering inspector
-    container.addEventListener('mousedown', (e) => e.stopPropagation(), true);
-    container.addEventListener('click', (e) => e.stopPropagation(), true);
+    // Make resizable from the corner handle
+    this.makeResizable(container, resizeHandle);
+
+    // Note: previously this container also had capture-phase 'mousedown'/'click'
+    // stopPropagation listeners meant to isolate panel clicks from the page's
+    // inspector. Because they ran in the capture phase on an ancestor, they
+    // stopped propagation before it ever reached descendants (drag handle,
+    // close button), which silently broke drag and the close button. They were
+    // also too late to shield document's own capture-phase listeners (which run
+    // before an ancestor's capture handler further down the tree), so they never
+    // achieved their intended purpose anyway.
   }
 
   /**
@@ -391,6 +416,97 @@ class RevampInspector {
   }
 
   /**
+   * Make panel resizable from a corner handle
+   */
+  private makeResizable(panel: HTMLElement, handle: HTMLElement): void {
+    const MIN_WIDTH = 320;
+    const MIN_HEIGHT = 300;
+
+    let isResizing = false;
+    let startX = 0;
+    let startY = 0;
+    let startWidth = 0;
+    let startHeight = 0;
+
+    // Mouse down on handle - start resize
+    const onMouseDown = (e: MouseEvent) => {
+      isResizing = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      startWidth = panel.offsetWidth;
+      startHeight = panel.offsetHeight;
+
+      // Disable text selection during resize
+      document.body.style.userSelect = 'none';
+
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    // Mouse move - perform resize
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+
+      const newWidth = Math.max(MIN_WIDTH, startWidth + (e.clientX - startX));
+      const newHeight = Math.max(MIN_HEIGHT, startHeight + (e.clientY - startY));
+
+      panel.style.width = `${newWidth}px`;
+      panel.style.height = `${newHeight}px`;
+    };
+
+    // Mouse up - end resize
+    const onMouseUp = () => {
+      if (!isResizing) return;
+
+      isResizing = false;
+
+      // Re-enable text selection
+      document.body.style.userSelect = '';
+
+      // Save size to localStorage
+      this.savePanelSize(panel.offsetWidth, panel.offsetHeight);
+    };
+
+    // Attach event listeners
+    handle.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+
+    // Store cleanup function for later removal
+    (panel as any).__resizeCleanup = () => {
+      handle.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+  }
+
+  /**
+   * Save panel size to localStorage
+   */
+  private savePanelSize(width: number, height: number): void {
+    try {
+      localStorage.setItem('revamp-panel-size', JSON.stringify({ width, height }));
+    } catch (error) {
+      console.warn('[Revamp] Failed to save panel size:', error);
+    }
+  }
+
+  /**
+   * Load panel size from localStorage
+   */
+  private loadPanelSize(): { width: number | null; height: number | null } {
+    try {
+      const saved = localStorage.getItem('revamp-panel-size');
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (error) {
+      console.warn('[Revamp] Failed to load panel size:', error);
+    }
+    return { width: null, height: null };
+  }
+
+  /**
    * Save panel position to localStorage
    */
   private savePanelPosition(x: number, y: number): void {
@@ -422,9 +538,12 @@ class RevampInspector {
   private removeFloatingPanel(): void {
     const container = document.getElementById('revamp-floating-panel');
     if (container) {
-      // Cleanup drag event listeners
+      // Cleanup drag/resize event listeners
       if ((container as any).__dragCleanup) {
         (container as any).__dragCleanup();
+      }
+      if ((container as any).__resizeCleanup) {
+        (container as any).__resizeCleanup();
       }
       container.remove();
       this.panelElement = null;

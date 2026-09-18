@@ -7,5 +7,5 @@ dist
 .zip
 .vscode
 .github
-*.md
-!README.md
+/*.md
+!/README.md
