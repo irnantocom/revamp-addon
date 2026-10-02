@@ -192,6 +192,13 @@ export class ChangeManager {
     }));
   }
 
+  /** Elements the user's changes act on, for protecting them from the page's own scripts */
+  editedElements(): Element[] {
+    const all = new Set<Element>();
+    this.entries.forEach((e) => e.touched.forEach((el) => el.isConnected && all.add(el)));
+    return Array.from(all);
+  }
+
   /** Operations that can be saved, in the order they were applied */
   persistedOperations(): PersistedOperation[] {
     return this.entries.map((e) => e.persisted).filter((p): p is PersistedOperation => !!p);

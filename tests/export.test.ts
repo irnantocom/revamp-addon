@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { extractCssUrls, extractImports, mapCssUrls, pruneFontSources, removeImports, wrapMedia } from '../src/export/css-bundle';
 import { parseSrcset, rewriteHtmlAssets, serializeSrcset } from '../src/export/html-assets';
 import { isTrackingUrl } from '../src/export/tracking';
-import { activateLazyContent, cleanClone, collectStyleSheets } from '../src/export/snapshot';
+import { activateLazyContent, cleanClone, collectStyleSheets, pinAttributes, restorePinned } from '../src/export/snapshot';
 import { buildStaticSite } from '../src/export/build-package';
 import { DEFAULT_EXPORT_OPTIONS, Fetcher, PageSnapshot } from '../src/export/types';
 
@@ -157,6 +157,59 @@ describe('cleanClone', () => {
     const [hero, color] = Array.from(root.querySelectorAll('div'));
     expect(hero.getAttribute('style')).toContain('url("hero.jpg")');
     expect(color.hasAttribute('style')).toBe(false);
+  });
+});
+
+describe('lazy images that the user replaced', () => {
+  // Markup as left by LiteSpeed's lazy-loader after it ran, then edited by the user in demo mode
+  const loaded = `<img data-lazyloaded="1" src="https://cdn.test/NEW.jpg" data-src="https://cdn.test/old.png"
+    data-srcset="https://cdn.test/old.png 1402w, https://cdn.test/old-300.png 300w" data-sizes="100vw" data-ll-status="loaded" sizes="100vw">`;
+
+  it('keeps the new src and does not bring the old image back through data-srcset', () => {
+    const root = document.createElement('div');
+    root.innerHTML = loaded;
+    activateLazyContent(root);
+    const img = root.querySelector('img')!;
+    expect(img.getAttribute('src')).toBe('https://cdn.test/NEW.jpg');
+    expect(img.hasAttribute('srcset')).toBe(false);
+    ['data-src', 'data-srcset', 'data-sizes', 'data-lazyloaded', 'data-ll-status'].forEach((a) => expect(img.hasAttribute(a)).toBe(false));
+  });
+
+  it('keeps the page\'s own loaded srcset, and strips the stale data-* copies', () => {
+    const root = document.createElement('div');
+    root.innerHTML = `<img src="a.png" srcset="a.png 1x, a2.png 2x" data-src="a.png" data-srcset="a.png 1x, a2.png 2x">`;
+    activateLazyContent(root);
+    const img = root.querySelector('img')!;
+    expect(img.getAttribute('srcset')).toBe('a.png 1x, a2.png 2x');
+    expect(img.hasAttribute('data-srcset')).toBe(false);
+  });
+
+  it('does not restore a <picture> source the user cleared', () => {
+    const root = document.createElement('div');
+    root.innerHTML = `<picture><source data-srcset="old.webp" type="image/webp"><img src="NEW.jpg"></picture>`;
+    activateLazyContent(root);
+    expect(root.querySelector('source')!.hasAttribute('srcset')).toBe(false);
+  });
+
+  it('still activates images that are genuinely not loaded yet, in pictures too', () => {
+    const root = document.createElement('div');
+    root.innerHTML = `<picture><source data-srcset="real.webp"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" data-src="real.jpg"></picture>`;
+    activateLazyContent(root);
+    expect(root.querySelector('source')!.getAttribute('srcset')).toBe('real.webp');
+    expect(root.querySelector('img')!.getAttribute('src')).toBe('real.jpg');
+  });
+
+  it('pinned attributes are restored if a script overwrote them', () => {
+    document.body.innerHTML = '<img id="i" src="NEW.jpg" style="width:10px"><a id="a" href="/x">x</a>';
+    const img = document.getElementById('i')!;
+    const pins = pinAttributes([img]);
+    img.setAttribute('src', 'old.png'); // lazy-loader runs while scrolling
+    img.setAttribute('srcset', 'old.png 1x');
+    img.removeAttribute('style');
+    restorePinned(pins);
+    expect(img.getAttribute('src')).toBe('NEW.jpg');
+    expect(img.hasAttribute('srcset')).toBe(false);
+    expect(img.getAttribute('style')).toBe('width:10px');
   });
 });
 

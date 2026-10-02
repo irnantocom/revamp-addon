@@ -1123,6 +1123,8 @@ class RevampInspector {
       const snapshot = await capturePageSnapshot({
         keepScripts: !!options.keepScripts,
         scrollFirst: !!options.scrollFirst,
+        // With demo changes included, protect edited elements from lazy-loaders that run while scrolling
+        editedElements: options.includeDemo ? changeManager.editedElements() : [],
       });
       return { success: true, data: snapshot };
     } catch (error) {

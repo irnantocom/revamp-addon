@@ -81,27 +81,55 @@ export function collectStyleSheets(doc: Document): { sheets: SheetSource[]; warn
   return { sheets, warnings };
 }
 
+/** Attributes lazy-loaders keep the original image in. Stale once the image is resolved, and misleading if a script re-runs. */
+const LAZY_LEFTOVER_ATTRS = [
+  ...LAZY_SRC_ATTRS, ...LAZY_SRCSET_ATTRS, 'data-sizes', 'data-lazyloaded', 'data-ll-status', 'data-lazy-sizes',
+];
+
 /**
  * Make lazy-loaded content real: swap data-src into src, data-bg into a background-image, drop loading="lazy".
+ *
+ * Only images that have NOT been loaded yet are touched (src missing or a placeholder). An image whose src is
+ * already real was either loaded by the page's own loader or replaced by the user, and its data-src/data-srcset
+ * still describe the *original* picture: copying them over would bring the old image back.
  */
 export function activateLazyContent(root: ParentNode): void {
-  root.querySelectorAll('img, source').forEach((el) => {
-    const current = el.getAttribute('src');
-    for (const attr of LAZY_SRC_ATTRS) {
-      const value = el.getAttribute(attr);
-      if (value && isPlaceholderSrc(current)) {
-        el.setAttribute('src', value);
-        break;
+  const unresolved = (img: Element | null) => !!img && isPlaceholderSrc(img.getAttribute('src'));
+
+  // <source> elements are judged first: activating their <img> would make the picture look "resolved"
+  root.querySelectorAll('picture > source').forEach((source) => {
+    const img = source.parentElement?.querySelector('img') ?? null;
+    if (unresolved(img) && !source.getAttribute('srcset')) {
+      for (const attr of LAZY_SRCSET_ATTRS) {
+        const value = source.getAttribute(attr);
+        if (value) {
+          source.setAttribute('srcset', value);
+          break;
+        }
       }
     }
-    for (const attr of LAZY_SRCSET_ATTRS) {
-      const value = el.getAttribute(attr);
-      if (value) {
-        el.setAttribute('srcset', value);
-        break;
+    LAZY_LEFTOVER_ATTRS.forEach((attr) => source.removeAttribute(attr));
+  });
+
+  root.querySelectorAll('img').forEach((img) => {
+    if (unresolved(img)) {
+      for (const attr of LAZY_SRC_ATTRS) {
+        const value = img.getAttribute(attr);
+        if (value) {
+          img.setAttribute('src', value);
+          break;
+        }
+      }
+      for (const attr of LAZY_SRCSET_ATTRS) {
+        const value = img.getAttribute(attr);
+        if (value) {
+          img.setAttribute('srcset', value);
+          break;
+        }
       }
     }
-    if (el.tagName === 'IMG') el.removeAttribute('loading');
+    img.removeAttribute('loading');
+    LAZY_LEFTOVER_ATTRS.forEach((attr) => img.removeAttribute(attr));
   });
 
   root.querySelectorAll('iframe[loading]').forEach((el) => el.removeAttribute('loading'));
@@ -233,8 +261,43 @@ export async function scrollThroughPage(maxMs = 20000): Promise<void> {
   }
 }
 
-export async function capturePageSnapshot(options: { keepScripts: boolean; scrollFirst: boolean }): Promise<PageSnapshot> {
-  if (options.scrollFirst) await scrollThroughPage();
+/** Attributes of user-edited elements that must survive the page's own scripts */
+const PINNED_ATTRS = ['src', 'srcset', 'sizes', 'style', 'href', 'poster'];
+
+export interface PinnedElement {
+  el: Element;
+  attrs: Record<string, string | null>;
+}
+
+/** Remember the edited state of elements, so it can be restored if a script changes it meanwhile */
+export function pinAttributes(elements: Element[]): PinnedElement[] {
+  return elements.map((el) => ({
+    el,
+    attrs: Object.fromEntries(PINNED_ATTRS.map((name) => [name, el.getAttribute(name)])),
+  }));
+}
+
+export function restorePinned(pins: PinnedElement[]): void {
+  for (const { el, attrs } of pins) {
+    for (const [name, value] of Object.entries(attrs)) {
+      if (el.getAttribute(name) === value) continue;
+      if (value === null) el.removeAttribute(name);
+      else el.setAttribute(name, value);
+    }
+  }
+}
+
+export async function capturePageSnapshot(options: {
+  keepScripts: boolean;
+  scrollFirst: boolean;
+  /** Elements the user edited in demo mode. Scrolling runs lazy-loaders that would otherwise overwrite them. */
+  editedElements?: Element[];
+}): Promise<PageSnapshot> {
+  const pins = pinAttributes(options.editedElements || []);
+  if (options.scrollFirst) {
+    await scrollThroughPage();
+    restorePinned(pins);
+  }
 
   const base = document.baseURI;
   const warnings: string[] = [];
