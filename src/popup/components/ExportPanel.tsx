@@ -1,140 +1,197 @@
 import React, { useState } from 'react';
 import JSZip from 'jszip';
+import { buildStaticSite } from '../../export/build-package';
+import { DEFAULT_EXPORT_OPTIONS, ExportOptions, ExportReport, Fetcher, PageSnapshot } from '../../export/types';
+import { sendToTab } from '../tab-messaging';
+
+const FETCH_TIMEOUT_MS = 25000;
+
+/**
+ * Downloads run from this extension page: with host permissions it can read cross-origin
+ * stylesheets, images and fonts that the web page itself is not allowed to.
+ */
+const fetcher: Fetcher = {
+  async text(url) {
+    const response = await fetchWithTimeout(url);
+    return response.text();
+  },
+  async binary(url) {
+    const response = await fetchWithTimeout(url);
+    return {
+      data: new Uint8Array(await response.arrayBuffer()),
+      contentType: response.headers.get('content-type') || '',
+    };
+  },
+};
+
+async function fetchWithTimeout(url: string): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { credentials: 'omit', signal: controller.signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw new Error('timed out');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const formatBytes = (bytes: number) =>
+  bytes > 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 
 const ExportPanel: React.FC = () => {
-  const [isExporting, setIsExporting] = useState(false);
-  const [exportStatus, setExportStatus] = useState('');
+  const [options, setOptions] = useState<ExportOptions>(DEFAULT_EXPORT_OPTIONS);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState('');
+  const [error, setError] = useState('');
+  const [report, setReport] = useState<ExportReport | null>(null);
 
-  const exportHTML = async () => {
-    setIsExporting(true);
-    setExportStatus('Fetching page HTML...');
+  const toggle = (key: keyof ExportOptions) => setOptions((prev) => ({ ...prev, [key]: !prev[key] }));
+
+  const runExport = async () => {
+    setBusy(true);
+    setError('');
+    setReport(null);
+    setStatus(options.scrollFirst ? 'Reading the page (scrolling to load lazy content)...' : 'Reading the page...');
 
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab.id) {
-        throw new Error('No active tab found');
+      const response = await sendToTab<{ success: boolean; error?: string; data?: PageSnapshot }>({
+        type: 'EXPORT_SNAPSHOT',
+        options,
+      });
+      if (!response?.success || !response.data) {
+        throw new Error(response?.error || 'Could not read the page. Reload it and try again.');
       }
 
-      // Get page HTML from content script
-      const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_PAGE_HTML' });
+      const { files, report: result } = await buildStaticSite(response.data, options, fetcher, setStatus);
 
-      if (!response.success) {
-        throw new Error('Failed to fetch page HTML');
-      }
-
-      setExportStatus('Generating export package...');
-
-      // Create ZIP
+      setStatus('Creating ZIP archive...');
       const zip = new JSZip();
+      Object.entries(files).forEach(([path, content]) => zip.file(path, content));
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
 
-      // Add HTML
-      zip.file('index.html', response.data);
-
-      // Add README
-      const readme = `# Exported Page
-
-This page was exported using Revamp - AI Page Editor
-
-## Files
-- index.html: The main HTML file
-
-## Notes
-- This is a basic export (Phase 1 MVP)
-- CSS and assets are not yet extracted (coming in Phase 2)
-- Some interactive features may not work without the original server
-
-## Next Steps
-Phase 2 will include:
-- CSS extraction and bundling
-- Asset downloading (images, videos, fonts)
-- JavaScript bundling
-- Full static site generation
-`;
-
-      zip.file('README.md', readme);
-
-      setExportStatus('Creating ZIP archive...');
-
-      // Generate ZIP
-      const blob = await zip.generateAsync({ type: 'blob' });
-
-      // Download
+      let host = 'page';
+      try {
+        host = new URL(response.data.url).hostname.replace(/^www\./, '');
+      } catch {
+        // keep default
+      }
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `revamp-export-${Date.now()}.zip`;
+      a.download = `${host}-static-${new Date().toISOString().slice(0, 10)}.zip`;
       a.click();
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
 
-      setExportStatus('Export complete!');
-      setTimeout(() => {
-        setExportStatus('');
-      }, 3000);
-    } catch (error) {
-      console.error('[Popup] Export failed:', error);
-      setExportStatus(`Export failed: ${error}`);
+      setReport(result);
+      setStatus(`Export complete (${formatBytes(blob.size)}).`);
+    } catch (e) {
+      console.error('[Export] failed:', e);
+      setStatus('');
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setIsExporting(false);
+      setBusy(false);
     }
   };
 
+  const Option: React.FC<{ id: keyof ExportOptions; label: string; hint: string }> = ({ id, label, hint }) => (
+    <label className="flex items-start gap-2 text-sm cursor-pointer">
+      <input type="checkbox" className="mt-1" checked={options[id]} onChange={() => toggle(id)} disabled={busy} />
+      <span>
+        <span className="text-gray-900">{label}</span>
+        <span className="block text-[11px] text-gray-500">{hint}</span>
+      </span>
+    </label>
+  );
+
   return (
     <div className="p-4 space-y-4">
-      {/* Export HTML */}
-      <div className="bg-white rounded-lg border border-gray-200 p-4">
-        <h2 className="text-lg font-semibold text-gray-900 mb-2">Export as HTML</h2>
-        <p className="text-sm text-gray-600 mb-4">
-          Export the current page as a static HTML file. This will download a ZIP file
-          containing the HTML.
-        </p>
+      <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900">Export static site</h2>
+          <p className="text-sm text-gray-600">
+            Saves the page you see as <code>index.html</code> + <code>css/styles.css</code> + <code>assets/</code>, ready to open
+            offline. Layout only: analytics, ads, chat widgets and cookie banners are left out.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Option id="includeDemo" label="Include demo changes" hint="Off exports the original page, without your edits." />
+          <Option id="scrollFirst" label="Scroll the page first" hint="Loads lazy images and scroll-reveal content before exporting." />
+          <Option id="downloadAssets" label="Download images and fonts" hint="Off keeps links to the original website." />
+          <Option id="downloadMedia" label="Also download video and audio" hint="Can make the package very large." />
+          <Option id="keepScripts" label="Keep JavaScript" hint="Menus and sliders may work, but scripts can break offline. Tracking scripts are always removed." />
+        </div>
 
         <button
-          onClick={exportHTML}
-          disabled={isExporting}
+          onClick={runExport}
+          disabled={busy}
           className={`w-full font-medium py-2 px-4 rounded-lg transition-colors ${
-            isExporting
-              ? 'bg-gray-400 cursor-not-allowed text-white'
-              : 'bg-green-600 hover:bg-green-700 text-white'
+            busy ? 'bg-gray-400 cursor-not-allowed text-white' : 'bg-green-600 hover:bg-green-700 text-white'
           }`}
         >
-          {isExporting ? 'Exporting...' : 'Export HTML'}
+          {busy ? 'Exporting...' : 'Export ZIP'}
         </button>
 
-        {exportStatus && (
+        {status && (
           <div
-            className={`mt-3 p-3 rounded-lg text-sm ${
-              exportStatus.includes('failed')
-                ? 'bg-red-50 text-red-800 border border-red-200'
-                : exportStatus.includes('complete')
-                ? 'bg-green-50 text-green-800 border border-green-200'
-                : 'bg-blue-50 text-blue-800 border border-blue-200'
+            className={`p-3 rounded-lg text-sm border ${
+              status.startsWith('Export complete')
+                ? 'bg-green-50 text-green-800 border-green-200'
+                : 'bg-blue-50 text-blue-800 border-blue-200'
             }`}
           >
-            {exportStatus}
+            {status}
           </div>
         )}
+        {error && <div className="p-3 rounded-lg text-sm bg-red-50 text-red-800 border border-red-200">Export failed: {error}</div>}
       </div>
 
-      {/* Phase 1 Limitations */}
-      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-        <h3 className="text-sm font-semibold text-yellow-900 mb-2">Phase 1 Limitations</h3>
-        <ul className="text-xs text-yellow-800 space-y-1 list-disc list-inside">
-          <li>Only exports raw HTML (no CSS extraction yet)</li>
-          <li>Assets (images, fonts) are not downloaded</li>
-          <li>External stylesheets remain as external references</li>
-          <li>JavaScript may not function properly</li>
-        </ul>
-      </div>
+      {report && (
+        <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-2 text-sm">
+          <h3 className="font-semibold text-gray-900">What was exported</h3>
+          <ul className="text-xs text-gray-700 space-y-1">
+            <li>HTML {formatBytes(report.htmlBytes)} · CSS {formatBytes(report.cssBytes)}</li>
+            <li>{report.assets.length} asset(s) downloaded ({formatBytes(report.assets.reduce((n, a) => n + a.bytes, 0))})</li>
+            {report.skipped.length > 0 && <li>{report.skipped.length} asset(s) kept as online links</li>}
+          </ul>
 
-      {/* Coming Soon */}
+          {report.failed.length > 0 && (
+            <details className="text-xs">
+              <summary className="text-amber-700 cursor-pointer">
+                {report.failed.length} asset(s) could not be downloaded (still linked to the original site)
+              </summary>
+              <ul className="mt-1 space-y-0.5 text-gray-600 break-all max-h-32 overflow-y-auto">
+                {report.failed.slice(0, 30).map((f) => (
+                  <li key={f.url}>
+                    {f.url} <span className="text-gray-400">— {f.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
+          {report.warnings.length > 0 && (
+            <ul className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 list-disc list-inside space-y-0.5">
+              {report.warnings.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          )}
+          <p className="text-[11px] text-gray-500">The ZIP also contains README.txt and report.json with these details.</p>
+        </div>
+      )}
+
       <div className="bg-gray-100 rounded-lg p-4">
-        <h3 className="text-sm font-semibold text-gray-900 mb-2">Coming in Phase 2:</h3>
+        <h3 className="text-sm font-semibold text-gray-900 mb-2">Good to know</h3>
         <ul className="text-xs text-gray-700 space-y-1 list-disc list-inside">
-          <li>CSS extraction and bundling</li>
-          <li>Asset downloading (images, videos, fonts)</li>
-          <li>Computed styles capture</li>
-          <li>URL rewriting for local paths</li>
-          <li>Complete offline static site generation</li>
+          <li>Responsive layouts are kept: the full CSS, including media queries, is exported.</li>
+          <li>Content drawn by JavaScript after the export (sliders, menus) will not move or open.</li>
+          <li>Links keep pointing to the original website.</li>
+          <li>Content inside Shadow DOM or &lt;canvas&gt; is not exported.</li>
         </ul>
       </div>
     </div>

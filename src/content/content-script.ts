@@ -11,6 +11,8 @@ import { pageIndex } from '../utils/page-index';
 import { DemoManager } from '../utils/demo-manager';
 import { captureScreenshot, downloadBlob } from '../utils/screenshot';
 import { AnnotationLayer } from '../utils/annotation-layer';
+import { capturePageSnapshot } from '../export/snapshot';
+import { ExportOptions } from '../export/types';
 import { Annotation } from '../types/demo';
 import { Operation } from '../types/operations';
 import { AIRevampResponse, AIChange, ChangeResult } from '../types/ai-response';
@@ -200,6 +202,10 @@ class RevampInspector {
           this.setPresentation(!!message.on);
           sendResponse({ success: true });
           break;
+
+        case 'EXPORT_SNAPSHOT':
+          this.exportSnapshot(message.options).then(sendResponse);
+          return true;
 
         case 'HANDOFF_CAPTURE':
           this.captureHandoff().then(sendResponse);
@@ -1102,6 +1108,28 @@ class RevampInspector {
       });
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /**
+   * Snapshot the page (markup + CSS) for a static export. With includeDemo off the original page is exported.
+   */
+  async exportSnapshot(options: ExportOptions): Promise<MessageResponse> {
+    const switchOff = !options.includeDemo && this.demo.getState().enabled && changeManager.getUndoStackSize() > 0;
+    if (switchOff) this.demo.setEnabled(false);
+
+    try {
+      if (switchOff) await new Promise(resolve => setTimeout(resolve, 200));
+      const snapshot = await capturePageSnapshot({
+        keepScripts: !!options.keepScripts,
+        scrollFirst: !!options.scrollFirst,
+      });
+      return { success: true, data: snapshot };
+    } catch (error) {
+      console.error('[Revamp] Export snapshot failed:', error);
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      if (switchOff) this.demo.setEnabled(true);
     }
   }
 
