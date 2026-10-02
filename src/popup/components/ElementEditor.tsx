@@ -11,6 +11,14 @@ const ElementEditor: React.FC<Props> = ({ element, onClear }) => {
   const [selectedAttribute, setSelectedAttribute] = useState('');
   const [customAttributeName, setCustomAttributeName] = useState('');
   const [attributeValue, setAttributeValue] = useState('');
+  const [style, setStyle] = useState({
+    color: '',
+    backgroundColor: '',
+    backgroundImage: '',
+    fontSize: '',
+    padding: '',
+    margin: '',
+  });
 
   useEffect(() => {
     if (element) {
@@ -82,6 +90,43 @@ const ElementEditor: React.FC<Props> = ({ element, onClear }) => {
     } catch (error) {
       console.error('[Popup] Failed to edit attribute:', error);
       alert('Failed to update attribute');
+    }
+  };
+
+  const handleStyleApply = async () => {
+    if (!element) return;
+
+    const styles: Record<string, string> = {};
+    if (style.color.trim()) styles['color'] = style.color.trim();
+    if (style.backgroundColor.trim()) styles['background-color'] = style.backgroundColor.trim();
+    if (style.backgroundImage.trim()) {
+      const url = style.backgroundImage.trim().replace(/"/g, '%22');
+      styles['background-image'] = /^url\(/i.test(url) ? url : `url("${url}")`;
+      styles['background-size'] = 'cover';
+      styles['background-position'] = 'center';
+    }
+    if (style.fontSize.trim()) styles['font-size'] = style.fontSize.trim();
+    if (style.padding.trim()) styles['padding'] = style.padding.trim();
+    if (style.margin.trim()) styles['margin'] = style.margin.trim();
+
+    if (Object.keys(styles).length === 0) {
+      alert('Fill in at least one style field');
+      return;
+    }
+
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab.id) return;
+
+      await chrome.tabs.sendMessage(tab.id, {
+        type: 'APPLY_CSS',
+        payload: { selector: element.selector, styles },
+      });
+
+      setStyle({ color: '', backgroundColor: '', backgroundImage: '', fontSize: '', padding: '', margin: '' });
+    } catch (error) {
+      console.error('[Popup] Failed to apply style:', error);
+      alert('Failed to apply style');
     }
   };
 
@@ -209,6 +254,36 @@ const ElementEditor: React.FC<Props> = ({ element, onClear }) => {
               </button>
             </>
           )}
+        </div>
+      </div>
+
+      {/* Style Editor */}
+      <div className="bg-white rounded-lg border border-gray-200 p-4">
+        <h3 className="text-sm font-semibold text-gray-900 mb-3">Edit Style</h3>
+        <div className="space-y-2">
+          {([
+            ['color', 'Text color (e.g. #1a365d)'],
+            ['backgroundColor', 'Background color (e.g. #f5f5f5)'],
+            ['backgroundImage', 'Background image URL'],
+            ['fontSize', 'Font size (e.g. 24px)'],
+            ['padding', 'Padding (e.g. 16px 24px)'],
+            ['margin', 'Margin (e.g. 0 auto)'],
+          ] as const).map(([key, placeholder]) => (
+            <input
+              key={key}
+              type="text"
+              value={style[key]}
+              onChange={(e) => setStyle((prev) => ({ ...prev, [key]: e.target.value }))}
+              placeholder={placeholder}
+              className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          ))}
+          <button
+            onClick={handleStyleApply}
+            className="w-full bg-purple-600 hover:bg-purple-700 text-white font-medium py-2 px-4 rounded-lg text-sm transition-colors"
+          >
+            Apply Style
+          </button>
         </div>
       </div>
 

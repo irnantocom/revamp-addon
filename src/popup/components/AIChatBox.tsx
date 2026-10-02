@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AIResponseParser } from '../../utils/ai-response-parser';
 import { AIRevampResponse, AIChange } from '../../types/ai-response';
-import { SubtreeSnapshot } from '../../types/dom-snapshot';
+import { Operation, OperationsResponse } from '../../types/operations';
+import { parseOperationsResponse } from '../../utils/operation-parser';
+import { buildSystemPrompt, PageIndexData } from '../../utils/prompt-builder';
 import { InspectedElement } from '../../types/inspector';
-import ChangePreview from './ChangePreview';
+import ChangePreview, { ChangeItem, PreviewStatus } from './ChangePreview';
 
 // Helper to ensure content script is ready
 const ensureContentScript = async (tabId: number): Promise<boolean> => {
@@ -26,63 +28,6 @@ const ensureContentScript = async (tabId: number): Promise<boolean> => {
   return false;
 };
 
-/**
- * Build element context from subtree snapshot
- */
-const buildElementContext = (snapshot: SubtreeSnapshot | null): string => {
-  if (!snapshot) {
-    return 'No element selected. Operating on entire page (body tag).';
-  }
-
-  const mode = snapshot.mode === 'element' ? 'ELEMENT-LEVEL' : 'PAGE-LEVEL';
-  
-  // Build children summary
-  const childrenSummary = snapshot.children
-    .filter(child => child.isVisible)
-    .map(child => {
-      const parts = [`  - <${child.tag}>`];
-      if (child.id) parts.push(`id="${child.id}"`);
-      if (child.classes.length > 0) parts.push(`class="${child.classes.slice(0, 3).join(' ')}"`);
-      if (child.src) parts.push(`src="${child.src}"`);
-      if (child.href) parts.push(`href="${child.href}"`);
-      if (child.textContent && child.textContent.length > 0) {
-        const preview = child.textContent.substring(0, 100);
-        parts.push(`text="${preview}${child.textContent.length > 100 ? '...' : ''}"`);
-      }
-      parts.push(`→ selector: "${child.selector}"`);
-      return parts.join(' ');
-    })
-    .join('\n');
-
-  // Build ALL IMAGES summary (includes nested images)
-  const imagesSummary = snapshot.allImages && snapshot.allImages.length > 0
-    ? snapshot.allImages
-        .filter(img => img.isVisible)
-        .map((img, index) => {
-          return `  [IMG-${index + 1}] src="${img.src}" → selector: "${img.selector}"`;
-        })
-        .join('\n')
-    : '  (no images found)';
-
-  return `MODE: ${mode}
-
-ROOT ELEMENT:
-- Tag: <${snapshot.rootTag}>
-- Selector: "${snapshot.rootSelector}"
-- Attributes: ${JSON.stringify(snapshot.attributes.slice(0, 5))}
-- Text Content: "${snapshot.textContent.substring(0, 200)}${snapshot.textContent.length > 200 ? '...' : ''}"
-
-CHILDREN (${snapshot.children.length} total, ${snapshot.children.filter(c => c.isVisible).length} visible):
-${childrenSummary || '  (no visible children)'}
-
-⚠️ ALL IMAGES IN THIS ELEMENT (${snapshot.allImages?.length || 0} total, IMPORTANT FOR IMAGE CHANGES):
-${imagesSummary}
-
-INNER HTML (first 1000 chars):
-${snapshot.innerHTML.substring(0, 1000)}${snapshot.innerHTML.length > 1000 ? '\n...(truncated)' : ''}
-`;
-};
-
 interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -96,16 +41,21 @@ interface Message {
     selector?: string;
     scope?: 'element' | 'page';
   };
-  // New structured format
+  // Selector-based structured format (fallback when model ignores the operations format)
   revampResponse?: AIRevampResponse;
+  // Operations on indexed elements (preferred format)
+  operationsResponse?: OperationsResponse;
 }
 
 interface Props {
   selectedElement?: InspectedElement | null;
   onClear?: () => void;
+  /** Text to put in the input box, e.g. coming from the Demo tab */
+  initialPrompt?: string | null;
+  onPromptConsumed?: () => void;
 }
 
-const AIChatBox: React.FC<Props> = ({ selectedElement, onClear }) => {
+const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, onPromptConsumed }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -115,6 +65,14 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear }) => {
   const [availableProviders, setAvailableProviders] = useState<string[]>([]);
   const [providerModels, setProviderModels] = useState<Record<string, string[]>>({});
   const [apiKeysLoaded, setApiKeysLoaded] = useState(false);
+  useEffect(() => {
+    if (initialPrompt) {
+      setInput(initialPrompt);
+      onPromptConsumed?.();
+    }
+  }, [initialPrompt]);
+
+  const [previewStatus, setPreviewStatus] = useState<PreviewStatus | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [messagesLoaded, setMessagesLoaded] = useState(false);
@@ -123,6 +81,7 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear }) => {
   // Provider labels for display
   const providerLabels: Record<string, string> = {
     openai: 'OpenAI',
+    azure: 'Azure OpenAI',
     claude: 'Claude',
     gemini: 'Gemini',
     perplexity: 'Perplexity',
@@ -135,6 +94,7 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear }) => {
   // Default model options (fallback if API fetch fails)
   const defaultModelOptions: Record<string, string[]> = {
     openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+    azure: [],
     claude: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
     gemini: ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-1.5-pro', 'gemini-2.0-flash-exp'],
     perplexity: ['llama-3.1-sonar-large-128k-online', 'llama-3.1-sonar-small-128k-online'],
@@ -332,30 +292,27 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear }) => {
         throw new Error('Failed to initialize content script. Please refresh the page.');
       }
 
-      // Fetch subtree snapshot of selected element (or body if none selected)
-      let snapshot: SubtreeSnapshot | null = null;
+      // Index the page (or the selected element) so the AI can reference elements by id
+      let pageIndexData: PageIndexData | null = null;
       try {
-        const snapshotResponse = await chrome.tabs.sendMessage(tab.id, {
-          type: 'GET_SUBTREE_SNAPSHOT',
+        const indexResponse = await chrome.tabs.sendMessage(tab.id, {
+          type: 'GET_PAGE_INDEX',
           selector: selectedElement?.selector?.selector || undefined,
         });
 
-        if (snapshotResponse.success) {
-          snapshot = snapshotResponse.snapshot;
-          console.log('[AI Chat] Subtree snapshot received:', {
-            mode: snapshot?.mode,
-            rootSelector: snapshot?.rootSelector,
-            childrenCount: snapshot?.children.length
+        if (indexResponse.success) {
+          pageIndexData = indexResponse.data;
+          console.log('[AI Chat] Page index received:', {
+            mode: pageIndexData?.mode,
+            count: pageIndexData?.count,
+            truncated: pageIndexData?.truncated,
           });
         } else {
-          console.warn('[AI Chat] Failed to get snapshot:', snapshotResponse.error);
+          console.warn('[AI Chat] Failed to get page index:', indexResponse.error);
         }
-      } catch (snapshotError) {
-        console.warn('[AI Chat] Could not get subtree snapshot:', snapshotError);
+      } catch (indexError) {
+        console.warn('[AI Chat] Could not get page index:', indexError);
       }
-
-      // Build adaptive context with subtree information
-      const elementContext = buildElementContext(snapshot);
 
       const response = await chrome.runtime.sendMessage({
         type: 'AI_REQUEST',
@@ -365,120 +322,7 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear }) => {
           messages: [
             {
               role: 'system',
-              content: `You are an AI assistant specialized in live web page transformation and DOM manipulation inside a Chrome Extension.
-
-You can operate in TWO MODES depending on the context:
-
-────────────────────────────
-MODE 1: ELEMENT-LEVEL EDITING
-────────────────────────────
-When a specific element is selected, focus on targeted changes within that element and its children.
-Analyze the children structure carefully to identify what needs to be changed.
-
-MODE 2: PAGE-LEVEL TRANSFORMATION
-────────────────────────────
-When no element is selected (body tag), analyze and transform the entire page structure.
-
-────────────────────────────
-CURRENT CONTEXT
-────────────────────────────
-${elementContext}
-
-────────────────────────────
-IMPORTANT INSTRUCTIONS
-────────────────────────────
-1. When user provides a link with content, analyze that content and map it to the CHILDREN and IMAGES
-2. ALWAYS check the "ALL IMAGES IN THIS ELEMENT" section - these are the actual img tags to modify
-3. For wrappers with text and images, create MULTIPLE targeted changes:
-   - One change for each text element (action: "text")
-   - One change for EACH image (action: "attribute" with attribute: "src")
-4. Use the selectors from "ALL IMAGES" section for image changes - these are guaranteed to work
-5. If user mentions content from a URL:
-   - Extract/infer text content → map to text elements
-   - Extract/infer image URLs → map to [IMG-1], [IMG-2], etc.
-6. Each image must have its OWN change object - do NOT skip images
-7. Look at both CHILDREN and ALL IMAGES sections to understand full structure
-8. Example: If there are 4 images in ALL IMAGES section, create 4 separate attribute changes
-9. **CRITICAL**: Keep ALL explanations SHORT (max 10 words) to prevent truncation
-10. Focus on accuracy over verbose descriptions
-
-────────────────────────────
-OUTPUT FORMAT (STRICT JSON)
-────────────────────────────
-
-You MUST respond with this EXACT JSON structure wrapped in a code block:
-
-\`\`\`json
-{
-  "success": true,
-  "explanation": "Brief summary (max 1 sentence)",
-  "changes": [
-    {
-      "id": "change-1",
-      "action": "css|html|text|attribute|remove|insert",
-      "selector": "CSS selector from CHILDREN list above",
-      "value": "The new value to apply",
-      "attribute": "attribute name (required for action: 'attribute')",
-      "explanation": "Short reason (max 10 words)"
-    }
-  ],
-  "warnings": ["Any potential issues (optional)"],
-  "estimatedImpact": "low|medium|high"
-}
-\`\`\`
-
-────────────────────────────
-ACTION TYPES & EXAMPLES
-────────────────────────────
-
-### css - Modify styles
-\`\`\`json
-{
-  "id": "change-1",
-  "action": "css",
-  "selector": "h1",
-  "value": {
-    "color": "#1a365d",
-    "font-family": "'Inter', sans-serif"
-  },
-  "explanation": "Updating heading style"
-}
-\`\`\`
-
-### text - Change text content
-\`\`\`json
-{
-  "id": "change-2",
-  "action": "text",
-  "selector": "[data-id='abc123'] > p",
-  "value": "Revolutionary AI platform for modern teams",
-  "explanation": "Updating description text"
-}
-\`\`\`
-
-### attribute - Modify element attributes
-\`\`\`json
-{
-  "id": "change-3",
-  "action": "attribute",
-  "selector": "img.hero-image",
-  "attribute": "src",
-  "value": "https://example.com/new-hero.jpg",
-  "explanation": "Replacing hero image"
-}
-\`\`\`
-
-────────────────────────────
-IMPORTANT RULES
-────────────────────────────
-1. ALWAYS output valid JSON inside \`\`\`json code block
-2. ALWAYS include explanation for overall change and each individual change
-3. Use specific selectors from the CHILDREN list provided above
-4. For wrapper with multiple elements (text + image), create SEPARATE changes for each
-5. Estimate impact: low (styling), medium (content), high (structure)
-6. DO NOT combine multiple element changes into one change object
-
-Use context7 for reasoning and best practices.`,
+              content: buildSystemPrompt(pageIndexData),
             },
             ...messages.map((m) => ({
               role: m.role,
@@ -491,7 +335,7 @@ Use context7 for reasoning and best practices.`,
           ],
           options: {
             maxTokens: model.includes('2.5') || model.includes('2.0') ? 8192 : 4096,
-            temperature: 0.7,
+            temperature: 0.3,
           },
         },
       });
@@ -513,12 +357,15 @@ Use context7 for reasoning and best practices.`,
           }
         }
         
-        // Try to parse structured response first (new format)
-        const revampResponse = AIResponseParser.parse(aiContent);
+        // Preferred: operations on indexed elements
+        const operationsResponse = parseOperationsResponse(aiContent);
+
+        // Fallback: selector-based structured response
+        const revampResponse = operationsResponse ? null : AIResponseParser.parse(aiContent);
         
         // Fallback: Try legacy single-action format
         let legacyAction;
-        if (!revampResponse) {
+        if (!operationsResponse && !revampResponse) {
           console.warn('[AI Chat] Structured parsing failed, trying legacy format');
           
           const patterns = [
@@ -559,9 +406,12 @@ Use context7 for reasoning and best practices.`,
           timestamp: Date.now(),
           action: legacyAction,
           revampResponse: revampResponse || undefined,
+          operationsResponse: operationsResponse || undefined,
         };
         
-        if (revampResponse) {
+        if (operationsResponse) {
+          console.log('[AI Chat] Parsed', operationsResponse.operations.length, 'operations');
+        } else if (revampResponse) {
           console.log('[AI Chat] Parsed structured response with', revampResponse.changes.length, 'changes');
         } else if (legacyAction) {
           console.log('[AI Chat] Parsed legacy single action');
@@ -642,118 +492,144 @@ Use context7 for reasoning and best practices.`,
     }
   };
 
-  // Apply single structured change
-  const applyStructuredChange = async (_message: Message, change: AIChange) => {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab.id) throw new Error('No active tab');
+  // Run an action against the active tab, making sure the content script is up
+  const withActiveTab = async <T,>(fn: (tabId: number) => Promise<T>): Promise<T | undefined> => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab.id) throw new Error('No active tab');
 
-      const ready = await ensureContentScript(tab.id);
-      if (!ready) {
-        alert('Failed to apply changes. Please refresh the page.');
-        return;
-      }
-
-      console.log('[AI Chat] Applying single change:', change);
-
-      const response = await chrome.tabs.sendMessage(tab.id, {
-        type: 'APPLY_AI_REVAMP',
-        payload: {
-          parsedResponse: {
-            success: true,
-            explanation: change.explanation,
-            changes: [change],
-            estimatedImpact: 'low'
-          }
-        }
-      });
-
-      if (response.success) {
-        alert(`✓ Change applied successfully!\n${response.data.summary}`);
-      } else {
-        alert(`Failed to apply: ${response.error}`);
-      }
-    } catch (error) {
-      console.error('[AI Chat] Error applying change:', error);
-      alert(`Error: ${error}`);
+    const ready = await ensureContentScript(tab.id);
+    if (!ready) {
+      alert('Failed to reach the page. Please refresh it and try again.');
+      return undefined;
     }
+    return fn(tab.id);
   };
 
-  // Apply all changes from structured response
-  const applyAllChanges = async (message: Message) => {
-    if (!message.revampResponse) return;
+  const asParsedResponse = (change: AIChange) => ({
+    success: true,
+    explanation: change.explanation,
+    changes: [change],
+    estimatedImpact: 'low',
+  });
 
+  // Toggle highlight of a change's target elements on the page
+  const togglePreview = async (message: Message, changeId: string) => {
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab.id) throw new Error('No active tab');
-
-      const ready = await ensureContentScript(tab.id);
-      if (!ready) {
-        alert('Failed to apply changes. Please refresh the page.');
-        return;
-      }
-
-      console.log('[AI Chat] Applying all changes:', message.revampResponse.changes.length);
-
-      const response = await chrome.tabs.sendMessage(tab.id, {
-        type: 'APPLY_AI_REVAMP',
-        payload: {
-          parsedResponse: message.revampResponse
+      await withActiveTab(async (tabId) => {
+        // Second click on the active eye turns the highlight off
+        if (previewStatus?.changeId === changeId) {
+          await chrome.tabs.sendMessage(tabId, { type: 'CLEAR_PREVIEW' });
+          setPreviewStatus(null);
+          return;
         }
-      });
 
-      if (response.success) {
-        const summary = response.data.summary;
-        const failures = response.data.failures;
-        let message = `✓ ${summary}`;
-        
-        if (failures && failures.length > 0) {
-          message += `\n\n⚠️ ${failures.length} change(s) failed:`;
-          failures.forEach((f: any) => {
-            message += `\n- ${f.error}`;
+        setPreviewStatus({ changeId });
+
+        const operation = message.operationsResponse?.operations.find((o) => o.id === changeId);
+        const legacy = message.revampResponse?.changes.find((c) => c.id === changeId);
+
+        const response = operation
+          ? await chrome.tabs.sendMessage(tabId, {
+              type: 'PREVIEW_OPERATIONS',
+              payload: { operations: [operation] },
+            })
+          : legacy
+          ? await chrome.tabs.sendMessage(tabId, {
+              type: 'PREVIEW_CHANGES',
+              payload: { parsedResponse: asParsedResponse(legacy) },
+            })
+          : null;
+
+        if (response?.success) {
+          setPreviewStatus({
+            changeId,
+            matches: response.data?.matches?.[changeId] ?? 0,
+            error: response.data?.errors?.[changeId],
           });
-        }
-        
-        alert(message);
-      } else {
-        alert(`Failed to apply changes: ${response.error}`);
-      }
-    } catch (error) {
-      console.error('[AI Chat] Error applying all changes:', error);
-      alert(`Error: ${error}`);
-    }
-  };
-
-  // Preview single change
-  const previewChange = async (change: AIChange) => {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab.id) return;
-
-      await chrome.tabs.sendMessage(tab.id, {
-        type: 'PREVIEW_CHANGES',
-        payload: {
-          parsedResponse: {
-            success: true,
-            explanation: change.explanation,
-            changes: [change],
-            estimatedImpact: 'low'
-          }
+        } else {
+          setPreviewStatus({ changeId, error: response?.error || 'Preview failed' });
         }
       });
-
-      // Auto-clear preview after 3 seconds
-      setTimeout(async () => {
-        try {
-          await chrome.tabs.sendMessage(tab.id!, { type: 'CLEAR_PREVIEW' });
-        } catch (e) {
-          // Ignore if tab closed
-        }
-      }, 3000);
-
     } catch (error) {
       console.error('[AI Chat] Error previewing change:', error);
+      setPreviewStatus({ changeId, error: 'Could not reach the page' });
     }
+  };
+
+  // Apply a chosen subset of a message's changes
+  const applySelectedChanges = async (message: Message, ids: string[]) => {
+    if (ids.length === 0) return;
+
+    try {
+      await withActiveTab(async (tabId) => {
+        const operations = (message.operationsResponse?.operations || []).filter((o) => ids.includes(o.id));
+        const legacyChanges = (message.revampResponse?.changes || []).filter((c) => ids.includes(c.id));
+
+        const response = operations.length > 0
+          ? await chrome.tabs.sendMessage(tabId, {
+              type: 'APPLY_OPERATIONS',
+              payload: { operations },
+            })
+          : await chrome.tabs.sendMessage(tabId, {
+              type: 'APPLY_AI_REVAMP',
+              payload: {
+                parsedResponse: {
+                  success: true,
+                  explanation: '',
+                  changes: legacyChanges,
+                  estimatedImpact: 'low',
+                },
+              },
+            });
+        setPreviewStatus(null);
+
+        if (response.success) {
+          let text = `✓ ${response.data.summary}`;
+          const failures = response.data.failures;
+          if (failures && failures.length > 0) {
+            text += `\n\n⚠️ ${failures.length} change(s) failed:`;
+            failures.forEach((f: any) => {
+              text += `\n- ${f.error}`;
+            });
+          }
+          alert(text);
+        } else {
+          alert(`Failed to apply changes: ${response.error}`);
+        }
+      });
+    } catch (error) {
+      console.error('[AI Chat] Error applying changes:', error);
+      alert(`Error: ${error}`);
+    }
+  };
+
+  // Undo the most recent applied change on the page
+  const undoLast = async () => {
+    try {
+      await withActiveTab(async (tabId) => {
+        const response = await chrome.tabs.sendMessage(tabId, { type: 'UNDO_CHANGE' });
+        if (!response?.success) alert('Nothing to undo.');
+      });
+    } catch (error) {
+      console.error('[AI Chat] Undo failed:', error);
+    }
+  };
+
+  const changeItems = (message: Message): ChangeItem[] => {
+    if (message.operationsResponse) {
+      return message.operationsResponse.operations.map((op: Operation) => ({
+        id: op.id,
+        badge: op.op,
+        target: op.op === 'move' ? `[${op.target}] → ${op.position} [${op.ref}]` : `[${op.target}]`,
+        explanation: op.explanation,
+      }));
+    }
+    return (message.revampResponse?.changes || []).map((c) => ({
+      id: c.id,
+      badge: c.action,
+      target: c.selector,
+      explanation: c.explanation,
+    }));
   };
 
   const applyAction = async (message: Message) => {
@@ -966,18 +842,34 @@ Use context7 for reasoning and best practices.`,
             >
               <p className="whitespace-pre-wrap break-words">{message.content}</p>
               
-              {/* New: Structured revamp response with multiple changes */}
-              {message.role === 'assistant' && message.revampResponse && message.revampResponse.changes.length > 0 && (
-                <ChangePreview
-                  changes={message.revampResponse.changes}
-                  onApply={(change) => applyStructuredChange(message, change)}
-                  onApplyAll={() => applyAllChanges(message)}
-                  onPreview={(change) => previewChange(change)}
-                />
+              {/* Structured response: operations on indexed elements, or selector-based changes */}
+              {message.role === 'assistant' && changeItems(message).length > 0 && (
+                <>
+                  <ChangePreview
+                    changes={changeItems(message)}
+                    previewStatus={previewStatus}
+                    onApply={(id) => applySelectedChanges(message, [id])}
+                    onApplySelected={(ids) => applySelectedChanges(message, ids)}
+                    onTogglePreview={(id) => togglePreview(message, id)}
+                  />
+                  {message.operationsResponse?.warnings && message.operationsResponse.warnings.length > 0 && (
+                    <ul className="mt-1 text-[10px] text-yellow-700 list-disc pl-4">
+                      {message.operationsResponse.warnings.map((w, i) => (
+                        <li key={i}>{w}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <button
+                    onClick={undoLast}
+                    className="mt-1 text-[10px] text-gray-500 hover:text-gray-800 underline"
+                  >
+                    ↩ Undo last applied change
+                  </button>
+                </>
               )}
-              
+
               {/* Legacy: Single action button (backward compatibility) */}
-              {message.role === 'assistant' && message.action && !message.revampResponse && (
+              {message.role === 'assistant' && message.action && !message.revampResponse && !message.operationsResponse && (
                 <button
                   onClick={() => applyAction(message)}
                   className="mt-2 w-full bg-green-600 hover:bg-green-700 text-white text-xs font-medium py-1 px-3 rounded transition-colors"

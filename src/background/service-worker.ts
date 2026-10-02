@@ -6,6 +6,7 @@
 import { OpenAIProvider } from '../ai/openai-provider';
 import { ClaudeProvider } from '../ai/claude-provider';
 import { GeminiProvider } from '../ai/gemini-provider';
+import { AzureOpenAIProvider } from '../ai/azure-openai-provider';
 import type { AIRequest } from '../ai/provider-interface';
 
 interface Message {
@@ -82,6 +83,13 @@ chrome.runtime.onMessage.addListener(
         handleUpdateSettings(message.payload, sendResponse);
         return true;
 
+      case 'CAPTURE_VISIBLE_TAB':
+        chrome.tabs
+          .captureVisibleTab(sender.tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT, { format: 'png' })
+          .then((dataUrl) => sendResponse({ success: true, data: dataUrl }))
+          .catch((error) => sendResponse({ success: false, error: String(error) }));
+        return true;
+
       case 'AI_REQUEST':
         handleAIRequest(message.payload, sendResponse);
         return true;
@@ -138,6 +146,7 @@ async function handleAIRequest(
     // Get API keys from storage
     const result = await chrome.storage.local.get('settings');
     const apiKeys = result.settings?.apiKeys || {};
+    const azure = result.settings?.azure || {};
 
     // Check if API key exists for the provider
     const apiKey = apiKeys[payload.provider];
@@ -154,6 +163,21 @@ async function handleAIRequest(
     switch (payload.provider) {
       case 'openai':
         provider = new OpenAIProvider({ apiKey });
+        break;
+      case 'azure':
+        if (!azure.endpoint || !azure.apiVersion || !azure.deployment) {
+          sendResponse({
+            success: false,
+            error: 'Azure OpenAI endpoint, API version and deployment must be set in Settings.',
+          });
+          return;
+        }
+        provider = new AzureOpenAIProvider({
+          apiKey,
+          endpoint: azure.endpoint,
+          apiVersion: azure.apiVersion,
+          deployment: azure.deployment,
+        });
         break;
       case 'claude':
         provider = new ClaudeProvider({ apiKey });
@@ -174,8 +198,9 @@ async function handleAIRequest(
       payload.messages,
       payload.model,
       {
-        temperature: payload.temperature,
-        maxTokens: payload.maxTokens,
+        // The chat sends these nested under `options`; accept both shapes
+        temperature: payload.temperature ?? (payload as any).options?.temperature,
+        maxTokens: payload.maxTokens ?? (payload as any).options?.maxTokens,
         stream: payload.stream,
       }
     );
@@ -231,6 +256,12 @@ async function handleFetchModels(
     let models: string[] = [];
 
     switch (payload.provider) {
+      case 'azure': {
+        const stored = await chrome.storage.local.get('settings');
+        const deployment = stored.settings?.azure?.deployment;
+        models = deployment ? [deployment] : [];
+        break;
+      }
       case 'openai':
         models = await fetchOpenAIModels(payload.apiKey);
         break;
@@ -403,6 +434,7 @@ async function validateClaudeKey(apiKey: string): Promise<boolean> {
 function getDefaultModels(provider: string): string[] {
   const defaults: Record<string, string[]> = {
     openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+    azure: [],
     claude: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
     gemini: ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-2.0-flash-exp'],
     perplexity: ['llama-3.1-sonar-large-128k-online', 'llama-3.1-sonar-small-128k-online'],

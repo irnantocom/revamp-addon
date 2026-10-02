@@ -29,19 +29,4 @@ export interface ChangeResult {
   success: boolean;
   elementsAffected: number;
   error?: string;
-  undoData?: UndoEntry;
-}
-
-export interface UndoEntry {
-  id: string;
-  timestamp: number;
-  changeId: string;
-  selector: string;
-  action: string;
-  previousState: {
-    html?: string;
-    text?: string;
-    styles?: Record<string, string>;
-    attributes?: Record<string, string>;
-  };
 }

@@ -9,7 +9,7 @@ export interface AIMessage {
 }
 
 export interface AIRequest {
-  provider: 'openai' | 'claude' | 'gemini' | 'perplexity' | 'mistral' | 'cohere' | 'groq' | 'openrouter';
+  provider: 'openai' | 'azure' | 'claude' | 'gemini' | 'perplexity' | 'mistral' | 'cohere' | 'groq' | 'openrouter';
   model: string;
   messages: AIMessage[];
   temperature?: number;

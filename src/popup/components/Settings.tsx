@@ -1,7 +1,14 @@
 import React, { useState, useEffect } from 'react';
 
+interface AzureConfig {
+  endpoint: string;
+  apiVersion: string;
+  deployment: string;
+}
+
 interface APIKeys {
   openai?: string;
+  azure?: string;
   claude?: string;
   gemini?: string;
   perplexity?: string;
@@ -13,6 +20,11 @@ interface APIKeys {
 
 const Settings: React.FC = () => {
   const [apiKeys, setApiKeys] = useState<APIKeys>({});
+  const [azure, setAzure] = useState<AzureConfig>({
+    endpoint: '',
+    apiVersion: '2024-12-01-preview',
+    deployment: '',
+  });
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
 
@@ -26,6 +38,9 @@ const Settings: React.FC = () => {
       if (response.success && response.data.apiKeys) {
         setApiKeys(response.data.apiKeys);
       }
+      if (response.success && response.data.azure) {
+        setAzure((prev) => ({ ...prev, ...response.data.azure }));
+      }
     } catch (error) {
       console.error('[Settings] Failed to load:', error);
     }
@@ -38,6 +53,7 @@ const Settings: React.FC = () => {
         type: 'UPDATE_SETTINGS',
         payload: {
           apiKeys,
+          azure,
         },
       });
 
@@ -70,6 +86,7 @@ const Settings: React.FC = () => {
 
   const providers: { key: keyof APIKeys; label: string; placeholder: string }[] = [
     { key: 'openai', label: 'OpenAI', placeholder: 'sk-...' },
+    { key: 'azure', label: 'Azure OpenAI', placeholder: 'Azure API key' },
     { key: 'claude', label: 'Anthropic Claude', placeholder: 'sk-ant-...' },
     { key: 'gemini', label: 'Google Gemini', placeholder: 'AIza...' },
     { key: 'perplexity', label: 'Perplexity', placeholder: 'pplx-...' },
@@ -112,6 +129,31 @@ const Settings: React.FC = () => {
                 {showKeys[provider.key] ? '👁️' : '👁️‍🗨️'}
               </button>
             </div>
+            {provider.key === 'azure' && (
+              <div className="mt-2 space-y-2">
+                <input
+                  type="text"
+                  value={azure.endpoint}
+                  onChange={(e) => setAzure((prev) => ({ ...prev, endpoint: e.target.value }))}
+                  placeholder="Endpoint: https://your-resource.openai.azure.com/"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <input
+                  type="text"
+                  value={azure.deployment}
+                  onChange={(e) => setAzure((prev) => ({ ...prev, deployment: e.target.value }))}
+                  placeholder="Deployment name"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <input
+                  type="text"
+                  value={azure.apiVersion}
+                  onChange={(e) => setAzure((prev) => ({ ...prev, apiVersion: e.target.value }))}
+                  placeholder="API version: 2024-12-01-preview"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+            )}
           </div>
         ))}
       </div>

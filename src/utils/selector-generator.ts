@@ -63,7 +63,8 @@ export class SelectorGenerator {
     for (const attr of dataAttrs) {
       const value = element.getAttribute(attr);
       if (value) {
-        return `[${attr}="${value}"]`;
+        const candidate = `[${attr}="${CSS.escape(value)}"]`;
+        if (this.isUnique(candidate)) return candidate;
       }
     }
 
@@ -71,9 +72,9 @@ export class SelectorGenerator {
     for (const attr of element.getAttributeNames()) {
       if (attr.startsWith('data-')) {
         const value = element.getAttribute(attr);
-        if (value && this.isUnique(`[${attr}="${value}"]`)) {
-          return `[${attr}="${value}"]`;
-        }
+        if (!value || attr.startsWith('data-revamp')) continue;
+        const candidate = `[${attr}="${CSS.escape(value)}"]`;
+        if (this.isUnique(candidate)) return candidate;
       }
     }
 
@@ -103,28 +104,28 @@ export class SelectorGenerator {
     let current: Element | null = element;
 
     while (current && current.nodeType === Node.ELEMENT_NODE) {
+      // A unique id anchors the path and stands in for this element's own segment
+      if (current.id && this.isUnique(`#${CSS.escape(current.id)}`)) {
+        path.unshift(`#${CSS.escape(current.id)}`);
+        break;
+      }
+
       let selector = current.tagName.toLowerCase();
 
-      // Add nth-child if there are siblings with same tag
-      const parent = current.parentElement;
+      // Add nth-of-type if there are siblings with same tag
+      const parent: Element | null = current.parentElement;
       if (parent) {
         const siblings = Array.from(parent.children).filter(
           (e) => e.tagName === current!.tagName
         );
         if (siblings.length > 1) {
           const index = siblings.indexOf(current) + 1;
-          selector += `:nth-child(${index})`;
+          // nth-of-type counts siblings of the same tag, matching how index is computed
+          selector += `:nth-of-type(${index})`;
         }
       }
 
       path.unshift(selector);
-
-      // Stop at a unique identifier
-      if (current.id && this.isUnique(`#${CSS.escape(current.id)}`)) {
-        path.unshift(`#${CSS.escape(current.id)}`);
-        break;
-      }
-
       current = current.parentElement;
     }
 
@@ -154,8 +155,8 @@ export class SelectorGenerator {
       }
 
       const tagName = current.tagName.toLowerCase();
-      const pathIndex = index > 1 ? `[${index}]` : '';
-      path.unshift(`${tagName}${pathIndex}`);
+      // Always index: "/section/h2" would match every section's h2, not just the first
+      path.unshift(`${tagName}[${index}]`);
 
       current = current.parentElement;
     }
@@ -172,6 +173,36 @@ export class SelectorGenerator {
       return elements.length === 1;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Query all elements matching a CSS selector or XPath. Never throws.
+   * Returns an error message when the selector is invalid.
+   */
+  static query(selector: string): { elements: Element[]; error?: string } {
+    const sel = selector.trim();
+    if (!sel) return { elements: [], error: 'Empty selector' };
+
+    try {
+      if (sel.startsWith('/') || sel.startsWith('(/')) {
+        const snapshot = document.evaluate(
+          sel,
+          document,
+          null,
+          XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+          null
+        );
+        const elements: Element[] = [];
+        for (let i = 0; i < snapshot.snapshotLength; i++) {
+          const node = snapshot.snapshotItem(i);
+          if (node && node.nodeType === Node.ELEMENT_NODE) elements.push(node as Element);
+        }
+        return { elements };
+      }
+      return { elements: Array.from(document.querySelectorAll(sel)) };
+    } catch (e) {
+      return { elements: [], error: `Invalid selector: ${sel}` };
     }
   }
 

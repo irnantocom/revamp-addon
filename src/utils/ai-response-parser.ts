@@ -57,10 +57,10 @@ export class AIResponseParser {
   }
 
   /**
-   * Validate dan parse JSON string
+   * Parse AI-produced JSON text, tolerating comments, trailing commas,
+   * unescaped characters and truncated output. Throws if unrecoverable.
    */
-  private static validateAndParse(jsonString: string): AIRevampResponse | null {
-    try {
+  static parseLooseJson(jsonString: string): { parsed: any; truncatedChangeIds: string[] } {
       // Step 1: Basic cleanup
       let cleaned = jsonString
         // Remove BOM and zero-width characters first
@@ -129,6 +129,37 @@ export class AIResponseParser {
           }
         }
       }
+
+    return { parsed, truncatedChangeIds: truncatedChangeIds };
+  }
+
+  /**
+   * Pull the JSON text out of a raw AI response (code fence or bare object)
+   */
+  static extractJsonText(rawResponse: string): string | null {
+    const jsonBlock = rawResponse.match(/```json\s*([\s\S]*?)\s*```/);
+    if (jsonBlock) return jsonBlock[1];
+
+    const codeBlock = rawResponse.match(/```\s*([\s\S]*?)\s*```/);
+    if (codeBlock && codeBlock[1].trim().startsWith('{')) return codeBlock[1].trim();
+
+    // Unterminated fence (truncated output): take everything after the opening fence
+    const openFence = rawResponse.match(/```(?:json)?\s*(\{[\s\S]*)$/);
+    if (openFence) return openFence[1];
+
+    const firstBrace = rawResponse.indexOf('{');
+    const lastBrace = rawResponse.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) return rawResponse.substring(firstBrace, lastBrace + 1);
+
+    return null;
+  }
+
+  /**
+   * Validate dan parse JSON string
+   */
+  private static validateAndParse(jsonString: string): AIRevampResponse | null {
+    try {
+      const { parsed, truncatedChangeIds } = this.parseLooseJson(jsonString);
 
       // Validate structure
       if (!parsed.changes || !Array.isArray(parsed.changes)) {

@@ -4,14 +4,20 @@
  */
 
 import { SelectorGenerator, SelectorInfo } from '../utils/selector-generator';
-import { HighlightOverlay } from '../utils/highlight-overlay';
+import { HighlightOverlay, PreviewOverlay } from '../utils/highlight-overlay';
 import { AIResponseParser } from '../utils/ai-response-parser';
 import { changeManager } from '../utils/change-manager';
-import { AIRevampResponse, AIChange } from '../types/ai-response';
+import { pageIndex } from '../utils/page-index';
+import { DemoManager } from '../utils/demo-manager';
+import { captureScreenshot, downloadBlob } from '../utils/screenshot';
+import { AnnotationLayer } from '../utils/annotation-layer';
+import { Annotation } from '../types/demo';
+import { Operation } from '../types/operations';
+import { AIRevampResponse, AIChange, ChangeResult } from '../types/ai-response';
+import { legacyChangeToOperations } from '../utils/legacy-changes';
 import { SubtreeSnapshot, ChildSummary, ElementAttribute } from '../types/dom-snapshot';
 import {
   InspectedElement,
-  EditOperation,
   ApplyChangePayload,
   MessageResponse,
 } from '../types/inspector';
@@ -25,9 +31,16 @@ interface ApplyRevampPayload {
 class RevampInspector {
   private isActive = false;
   private overlay: HighlightOverlay;
+  private previewOverlay = new PreviewOverlay();
+  private locateTimer: number | undefined;
+  private demo = new DemoManager(changeManager, pageIndex);
+  private pickOverlay = new HighlightOverlay({ borderColor: '#f59e0b', backgroundColor: 'rgba(245, 158, 11, 0.12)' });
+  private annotations = new AnnotationLayer(
+    () => this.demo.getAnnotations(),
+    (annotation) => this.demo.resolveAnnotation(annotation),
+    (annotation) => this.editAnnotation(annotation)
+  );
   private selectedElement: Element | null = null;
-  private editHistory: EditOperation[] = [];
-  private maxHistorySize = 50;
   private panelOpen = false;
   private panelElement: HTMLIFrameElement | null = null;
 
@@ -35,6 +48,10 @@ class RevampInspector {
     this.overlay = new HighlightOverlay();
     this.setupMessageListener();
     this.injectStyles();
+    this.demo.onAnnotationsChange(() => this.annotations.scheduleRender());
+    // Pins sit at document coordinates, so re-place them when edits move or hide elements
+    changeManager.onChange(() => this.annotations.scheduleRender());
+    void this.demo.init();
     console.log('[Revamp] Content script initialized');
   }
 
@@ -108,13 +125,101 @@ class RevampInspector {
           break;
 
         case 'APPLY_AI_CHANGE':
-          const result = this.applyAIChange(message.payload);
-          sendResponse(result);
-          break;
+          this.applyAIChange(message.payload).then(sendResponse);
+          return true;
 
         case 'APPLY_AI_REVAMP':
           this.applyRevampChanges(message.payload).then(sendResponse);
           return true; // Keep channel open for async
+
+        case 'DEMO_STATE':
+          sendResponse({
+            success: true,
+            data: { ...this.demo.getState(), sections: pageIndex.listSections() },
+          });
+          break;
+
+        case 'DEMO_SET_ENABLED':
+          this.demo.setEnabled(!!message.enabled);
+          sendResponse({ success: true });
+          break;
+
+        case 'DEMO_SET_NAME':
+          this.demo.setName(String(message.name || ''));
+          sendResponse({ success: true });
+          break;
+
+        case 'DEMO_REVERT':
+          sendResponse({ success: true, data: { reverted: this.demo.revert(String(message.key)) } });
+          break;
+
+        case 'DEMO_RESET':
+          this.demo.reset().then(() => sendResponse({ success: true }));
+          return true;
+
+        case 'DEMO_EXPORT':
+          sendResponse({ success: true, data: this.demo.toConfig() });
+          break;
+
+        case 'DEMO_IMPORT':
+          try {
+            sendResponse({ success: true, data: this.demo.importConfig(message.config) });
+          } catch (error) {
+            sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+
+        case 'ANNOTATION_ADD':
+          void this.addAnnotation();
+          sendResponse({ success: true });
+          break;
+
+        case 'ANNOTATION_UPDATE':
+          sendResponse({
+            success: this.demo.updateAnnotation(String(message.id), {
+              text: typeof message.text === 'string' ? message.text : undefined,
+              resolved: typeof message.resolved === 'boolean' ? message.resolved : undefined,
+            }),
+          });
+          break;
+
+        case 'ANNOTATION_DELETE':
+          sendResponse({ success: this.demo.deleteAnnotation(String(message.id)) });
+          break;
+
+        case 'ANNOTATION_VISIBLE':
+          this.annotations.setVisible(!!message.visible);
+          sendResponse({ success: true });
+          break;
+
+        case 'PRESENTATION_SET':
+          this.setPresentation(!!message.on);
+          sendResponse({ success: true });
+          break;
+
+        case 'HANDOFF_CAPTURE':
+          this.captureHandoff().then(sendResponse);
+          return true;
+
+        case 'SCREENSHOT':
+          this.takeScreenshot(!!message.fullPage).then(sendResponse);
+          return true;
+
+        case 'LOCATE_ELEMENT':
+          sendResponse(this.locateElement(Number(message.id), String(message.label || '')));
+          break;
+
+        case 'GET_PAGE_INDEX':
+          sendResponse(this.getPageIndex(message.selector));
+          break;
+
+        case 'APPLY_OPERATIONS':
+          sendResponse(this.applyOperations(message.payload?.operations || []));
+          break;
+
+        case 'PREVIEW_OPERATIONS':
+          sendResponse(this.previewOperations(message.payload?.operations || []));
+          break;
 
         case 'PREVIEW_CHANGES':
           this.previewChanges(message.payload).then(sendResponse);
@@ -224,6 +329,7 @@ class RevampInspector {
     // Create container
     const container = document.createElement('div');
     container.id = 'revamp-floating-panel';
+    container.setAttribute('data-revamp-ui', 'true');
     container.style.cssText = `
       position: fixed;
       ${savedPos.x !== null ? `left: ${savedPos.x}px;` : 'right: 20px;'}
@@ -633,323 +739,126 @@ class RevampInspector {
   }
 
   /**
-   * Edit text content of an element
+   * Run operations on elements found via legacy selector info, as one history entry each
    */
-  editText(selectorInfo: SelectorInfo, newValue: string): void {
+  private applyToSelector(
+    selectorInfo: SelectorInfo,
+    build: (id: number) => Operation
+  ): void {
     const element = SelectorGenerator.resolve(selectorInfo.selector, selectorInfo.type);
     if (!element) {
       console.error('[Revamp] Element not found:', selectorInfo.selector);
       return;
     }
+    const [result] = changeManager.applyOperations([build(pageIndex.idOf(element))], pageIndex);
+    if (!result.success) console.error('[Revamp] Edit failed:', result.error);
+  }
 
-    // Save to history
-    this.addToHistory({
-      selector: selectorInfo,
-      type: 'text',
-      value: newValue,
-      originalValue: element.textContent,
-    });
-
-    element.textContent = newValue;
-    console.log('[Revamp] Text edited:', selectorInfo.selector);
+  /**
+   * Edit text content of an element
+   */
+  editText(selectorInfo: SelectorInfo, newValue: string): void {
+    this.applyToSelector(selectorInfo, (target) => ({
+      id: `edit-text-${Date.now()}`, op: 'set_text', target, text: newValue, explanation: 'Edit text',
+    }));
   }
 
   /**
    * Edit attribute of an element
    */
   editAttribute(selectorInfo: SelectorInfo, attribute: string, value: string): void {
-    const element = SelectorGenerator.resolve(selectorInfo.selector, selectorInfo.type);
-    if (!element) {
-      console.error('[Revamp] Element not found:', selectorInfo.selector);
-      return;
-    }
-
-    // Save to history
-    this.addToHistory({
-      selector: selectorInfo,
-      type: 'attribute',
-      value: { attribute, value },
-      originalValue: element.getAttribute(attribute),
-    });
-
-    element.setAttribute(attribute, value);
-    console.log('[Revamp] Attribute edited:', attribute, '=', value);
+    this.applyToSelector(selectorInfo, (target) => ({
+      id: `edit-attr-${Date.now()}`, op: 'set_attr', target, name: attribute, value, explanation: `Set ${attribute}`,
+    }));
   }
 
   /**
    * Apply CSS styles to an element
    */
   applyCSS(selectorInfo: SelectorInfo, styles: Record<string, string>): void {
-    const element = SelectorGenerator.resolve(selectorInfo.selector, selectorInfo.type);
-    if (!element || !(element instanceof HTMLElement)) {
-      console.error('[Revamp] Element not found:', selectorInfo.selector);
-      return;
-    }
-
-    // Get current styles for undo
-    const originalStyles: Record<string, string> = {};
-    Object.keys(styles).forEach((property) => {
-      originalStyles[property] = element.style.getPropertyValue(property);
-    });
-
-    // Save to history
-    this.addToHistory({
-      selector: selectorInfo,
-      type: 'style',
-      value: styles,
-      originalValue: originalStyles,
-    });
-
-    // Apply new styles
-    Object.entries(styles).forEach(([property, value]) => {
-      element.style.setProperty(property, value);
-    });
-
-    console.log('[Revamp] CSS applied:', styles);
+    this.applyToSelector(selectorInfo, (target) => ({
+      id: `edit-style-${Date.now()}`, op: 'set_style', target, styles, explanation: 'Edit style',
+    }));
   }
 
   /**
-   * Add operation to edit history
-   */
-  private addToHistory(operation: EditOperation): void {
-    this.editHistory.push(operation);
-    if (this.editHistory.length > this.maxHistorySize) {
-      this.editHistory.shift();
-    }
-  }
-    
-  /**
-   * Undo the last edit
+   * Undo the last applied change
    */
   undoLastEdit(): void {
-    const operation = this.editHistory.pop();
-    if (!operation) {
-      console.log('[Revamp] No edits to undo');
-      return;
-    }
-
-    const element = SelectorGenerator.resolve(
-      operation.selector.selector,
-      operation.selector.type
-    );
-    if (!element) {
-      console.error('[Revamp] Element not found for undo');
-      return;
-    }
-
-    switch (operation.type) {
-      case 'text':
-        element.textContent = operation.originalValue || '';
-        break;
-      case 'attribute':
-        const { attribute } = operation.value;
-        if (operation.originalValue) {
-          element.setAttribute(attribute, operation.originalValue);
-        } else {
-          element.removeAttribute(attribute);
-        }
-        break;
-      case 'style':
-        if (element instanceof HTMLElement) {
-          Object.entries(operation.originalValue as Record<string, string>).forEach(
-            ([property, value]) => {
-              if (value) {
-                element.style.setProperty(property, value);
-              } else {
-                element.style.removeProperty(property);
-              }
-            }
-          );
-        }
-        break;
-    }
-
-    console.log('[Revamp] Undo performed');
+    if (!changeManager.undo()) console.log('[Revamp] No edits to undo');
   }
 
   /**
    * Get full page HTML
    */
   getPageHTML(): string {
-    return document.documentElement.outerHTML;
+    // Export the page as the demo shows it, without Revamp's own UI or bookkeeping attributes
+    const clone = document.documentElement.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll('[data-revamp-ui], #revamp-inspector-styles').forEach(el => el.remove());
+    clone.querySelectorAll('[data-revamp-hidden], [data-revamp-display]').forEach(el => {
+      el.removeAttribute('data-revamp-hidden');
+      el.removeAttribute('data-revamp-display');
+    });
+    return clone.outerHTML;
   }
 
   /**
-   * Apply AI-generated change
+   * Apply a single selector-based AI change (legacy format) to every matched element
    */
-  applyAIChange(payload: ApplyChangePayload): MessageResponse {
-    try {
-      console.log('[Revamp] Applying AI change:', payload);
-
-      // For script action, we don't need to resolve element first
-      if (payload.action === 'script') {
-        try {
-          // Execute script in page context safely
-          const script = document.createElement('script');
-          script.textContent = `(function() { ${payload.value} })();`;
-          document.head.appendChild(script);
-          script.remove();
-          
-          this.addToHistory({
-            selector: { selector: 'document', type: 'xpath', confidence: 'high' },
-            type: 'style', // Use generic type for history
-            value: { script: payload.value },
-            originalValue: null,
-          });
-          
-          return { success: true };
-        } catch (error) {
-          return {
-            success: false,
-            error: `Script execution failed: ${error}`,
-          };
-        }
-      }
-
-      // Resolve element(s) for other actions
-      const selectorStr = payload.selector.selector;
-      const selectorType = payload.selector.type;
-      
-      console.log('[Revamp] Selector:', selectorStr, 'Type:', selectorType);
-      
-      // Check if selector targets multiple elements (page-level)
-      let elements: Element[];
-      
-      // Always try querySelectorAll for css-path type or comma-separated selectors
-      if (selectorType === 'css-path' || selectorStr.includes(',')) {
-        try {
-          const nodeList = document.querySelectorAll(selectorStr);
-          elements = Array.from(nodeList);
-          console.log('[Revamp] Found', elements.length, 'elements with querySelectorAll');
-        } catch (e) {
-          console.error('[Revamp] querySelectorAll failed:', e);
-          elements = [];
-        }
-      } else {
-        // Single element resolution
-        const singleElement = SelectorGenerator.resolve(selectorStr, selectorType);
-        elements = singleElement ? [singleElement] : [];
-        console.log('[Revamp] Found', elements.length, 'element with SelectorGenerator');
-      }
-
-      if (elements.length === 0) {
-        console.error('[Revamp] No elements found for selector:', selectorStr);
-        return {
-          success: false,
-          error: `No elements found matching selector: ${selectorStr}`,
-        };
-      }
-
-      console.log('[Revamp] Applying', payload.action, 'to', elements.length, 'element(s)');
-
-      // Apply changes to all matched elements
-      let appliedCount = 0;
-      
-      for (const element of elements) {
-        try {
-          switch (payload.action) {
-            case 'text':
-              // Save original for undo (only for first element to avoid history bloat)
-              if (appliedCount === 0) {
-                this.addToHistory({
-                  selector: payload.selector,
-                  type: 'text',
-                  value: payload.value,
-                  originalValue: element.textContent,
-                });
-              }
-              element.textContent = payload.value;
-              appliedCount++;
-              break;
-
-            case 'html':
-              if (appliedCount === 0) {
-                this.addToHistory({
-                  selector: payload.selector,
-                  type: 'html',
-                  value: payload.value,
-                  originalValue: element.innerHTML,
-                });
-              }
-              element.innerHTML = payload.value;
-              appliedCount++;
-              break;
-
-            case 'css':
-              if (element instanceof HTMLElement) {
-                // Get current styles for undo (only for first element)
-                if (appliedCount === 0) {
-                  const originalStyles: Record<string, string> = {};
-                  Object.keys(payload.value).forEach((property) => {
-                    originalStyles[property] = element.style.getPropertyValue(property);
-                  });
-                  
-                  this.addToHistory({
-                    selector: payload.selector,
-                    type: 'style',
-                    value: payload.value,
-                    originalValue: originalStyles,
-                  });
-                }
-
-                // Apply styles
-                Object.entries(payload.value as Record<string, string>).forEach(
-                  ([property, value]) => {
-                    element.style.setProperty(property, value);
-                  }
-                );
-                appliedCount++;
-              }
-              break;
-
-            case 'attribute':
-              if (payload.attribute) {
-                if (appliedCount === 0) {
-                  this.addToHistory({
-                    selector: payload.selector,
-                    type: 'attribute',
-                    value: { attribute: payload.attribute, value: payload.value },
-                    originalValue: element.getAttribute(payload.attribute),
-                  });
-                }
-                element.setAttribute(payload.attribute, payload.value);
-                appliedCount++;
-              }
-              break;
-
-            default:
-              return {
-                success: false,
-                error: `Unknown action: ${payload.action}`,
-              };
-          }
-        } catch (elementError) {
-          console.warn('[Revamp] Failed to apply change to element:', elementError);
-        }
-      }
-
-      if (appliedCount === 0) {
-        return {
-          success: false,
-          error: 'Failed to apply changes to any elements',
-        };
-      }
-
-      console.log(`[Revamp] Applied ${payload.action} to ${appliedCount} element(s)`);
-      return { 
-        success: true,
-        data: { appliedCount },
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: String(error),
-      };
+  async applyAIChange(payload: ApplyChangePayload): Promise<MessageResponse> {
+    if ((payload.action as string) === 'script') {
+      return { success: false, error: 'Script actions are not supported. Use text, style, html or attribute changes.' };
     }
+
+    const [result] = await this.applySelectorChanges([{
+      id: `legacy-${Date.now()}`,
+      action: payload.action as AIChange['action'],
+      selector: payload.selector.selector,
+      value: payload.value,
+      attribute: payload.attribute,
+      explanation: 'AI change',
+    }]);
+
+    return result.success
+      ? { success: true, data: { appliedCount: result.elementsAffected } }
+      : { success: false, error: result.error };
   }
 
   /**
-   * Apply AI Revamp Changes (new structured format)
+   * Apply selector-based changes. Everything except "insert" is converted to
+   * operations so it is logged, revertible, saved and exportable like any other edit.
+   */
+  private async applySelectorChanges(changes: AIChange[]): Promise<ChangeResult[]> {
+    const results: ChangeResult[] = [];
+
+    for (const change of changes) {
+      const converted = legacyChangeToOperations(change, pageIndex);
+
+      if (converted === null) {
+        // "insert" has no operation equivalent
+        results.push(await changeManager.applyChange(change));
+        continue;
+      }
+      if ('error' in converted) {
+        results.push({ changeId: change.id, success: false, elementsAffected: 0, error: converted.error });
+        continue;
+      }
+
+      const opResults = changeManager.applyOperations(converted.operations, pageIndex);
+      const ok = opResults.filter(r => r.success).length;
+      results.push({
+        changeId: change.id,
+        success: ok > 0,
+        elementsAffected: ok,
+        error: ok === 0 ? opResults[0]?.error : undefined,
+      });
+    }
+
+    return results;
+  }
+
+  /**
+   * Apply AI Revamp Changes (selector-based structured format)
    */
   async applyRevampChanges(payload: ApplyRevampPayload): Promise<MessageResponse> {
     try {
@@ -969,10 +878,10 @@ class RevampInspector {
         };
       }
 
+      this.previewOverlay.clear();
       console.log('[Revamp] Applying', response.changes.length, 'changes');
 
-      // Apply all changes using ChangeManager
-      const results = await changeManager.applyChanges(response.changes);
+      const results = await this.applySelectorChanges(response.changes);
 
       // Calculate summary
       const successCount = results.filter(r => r.success).length;
@@ -999,6 +908,261 @@ class RevampInspector {
   }
 
   /**
+   * Build the numbered page index the AI uses to reference elements
+   */
+  getPageIndex(selector?: string): MessageResponse {
+    try {
+      let root: Element | null = null;
+      if (selector) root = SelectorGenerator.query(selector).elements[0] || null;
+      if (!root) root = this.selectedElement || document.body;
+      if (!root) return { success: false, error: 'No element to index' };
+
+      const { text, count, truncated } = pageIndex.build(root);
+      return {
+        success: true,
+        data: {
+          mode: root === document.body ? 'page' : 'element',
+          rootId: pageIndex.idOf(root),
+          rootTag: root.tagName.toLowerCase(),
+          index: text,
+          count,
+          truncated,
+          url: location.href,
+          title: document.title,
+        },
+      };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  }
+
+  /**
+   * Apply structured operations from the AI
+   */
+  applyOperations(operations: Operation[]): MessageResponse {
+    this.previewOverlay.clear();
+    if (operations.length === 0) return { success: false, error: 'No operations to apply' };
+
+    const results = changeManager.applyOperations(operations, pageIndex);
+    const succeeded = results.filter(r => r.success).length;
+    const failures = results.filter(r => !r.success);
+
+    return {
+      success: succeeded > 0,
+      data: {
+        summary: `Applied ${succeeded}/${operations.length} change(s)`,
+        results,
+        failures: failures.length > 0 ? failures : undefined,
+        undoCount: changeManager.getUndoStackSize(),
+      },
+      error: succeeded === 0 ? failures[0]?.error || 'No changes could be applied' : undefined,
+    };
+  }
+
+  /**
+   * Highlight the elements operations would touch
+   */
+  previewOperations(operations: Operation[]): MessageResponse {
+    const result = this.previewOverlay.show(
+      operations.map(op => ({
+        id: op.id,
+        selector: `revamp-id:${op.target}`,
+        label: `[${op.target}] ${op.op}${op.explanation ? ` – ${op.explanation}` : ''}`.slice(0, 80),
+      })),
+      selector => this.resolvePreviewSelector(selector)
+    );
+    return { success: true, data: { matches: result.matches, errors: result.errors } };
+  }
+
+  /**
+   * Let the user click an element, then write a note for it
+   */
+  private async addAnnotation(): Promise<void> {
+    const el = await this.annotations.pickElement((target) => {
+      if (target) this.pickOverlay.highlight(target);
+      else this.pickOverlay.hide();
+    });
+    if (!el) return;
+
+    this.annotations.openPopover(el, '', {
+      onSave: (text) => this.demo.addAnnotation(el, text),
+    });
+  }
+
+  private editAnnotation(annotation: Annotation): void {
+    const el = this.demo.resolveAnnotation(annotation);
+    if (!el) return;
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+
+    this.annotations.openPopover(el, annotation.text, {
+      resolved: annotation.resolved,
+      onSave: (text) => this.demo.updateAnnotation(annotation.id, { text }),
+      onToggleResolved: () => this.demo.updateAnnotation(annotation.id, { resolved: !annotation.resolved }),
+      onDelete: () => this.demo.deleteAnnotation(annotation.id),
+    });
+  }
+
+  /**
+   * Presentation mode: hide Revamp's panel and overlays so the page looks like the real site,
+   * leaving a small pill to exit (Esc also exits).
+   */
+  setPresentation(on: boolean): void {
+    const panel = document.getElementById('revamp-floating-panel');
+    const existing = document.getElementById('revamp-presentation-pill');
+
+    if (!on) {
+      existing?.remove();
+      this.annotations.suspend(false);
+      document.removeEventListener('keydown', this.handlePresentationKey, true);
+      if (panel) panel.style.display = '';
+      return;
+    }
+
+    this.stopInspector();
+    this.previewOverlay.clear();
+    this.annotations.suspend(true);
+    if (panel) panel.style.display = 'none';
+    existing?.remove();
+
+    const pill = document.createElement('div');
+    pill.id = 'revamp-presentation-pill';
+    pill.setAttribute('data-revamp-ui', 'true');
+    pill.style.cssText = `
+      position: fixed; left: 16px; bottom: 16px; z-index: 2147483647;
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 12px; border-radius: 999px;
+      background: rgba(17, 24, 39, 0.85); color: #fff;
+      font: 12px/1.2 system-ui, sans-serif; opacity: 0.35; transition: opacity .15s;
+    `;
+    pill.onmouseenter = () => (pill.style.opacity = '1');
+    pill.onmouseleave = () => (pill.style.opacity = '0.35');
+
+    const label = document.createElement('span');
+    label.textContent = `${this.demo.getState().name || 'Demo preview'} · Esc to exit`;
+    const exit = document.createElement('button');
+    exit.textContent = 'Exit';
+    exit.style.cssText = 'all: unset; cursor: pointer; font-weight: 600; text-decoration: underline;';
+    exit.onclick = () => this.setPresentation(false);
+    pill.append(label, exit);
+    document.body.appendChild(pill);
+
+    document.addEventListener('keydown', this.handlePresentationKey, true);
+  }
+
+  private handlePresentationKey = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape') this.setPresentation(false);
+  };
+
+  /**
+   * Run `fn` with all of Revamp's UI (panel, presentation pill, note pins, overlays) hidden
+   */
+  private async withCleanPage<T>(fn: () => Promise<T>): Promise<T> {
+    const panel = document.getElementById('revamp-floating-panel');
+    const pill = document.getElementById('revamp-presentation-pill');
+    const hiddenUi = [panel, pill].filter((el): el is HTMLElement => !!el);
+    const previousDisplay = hiddenUi.map(el => el.style.display);
+
+    this.previewOverlay.clear();
+    this.overlay.hide();
+    this.annotations.suspend(true);
+    hiddenUi.forEach(el => (el.style.display = 'none'));
+
+    try {
+      return await fn();
+    } finally {
+      hiddenUi.forEach((el, i) => (el.style.display = previousDisplay[i]));
+      // Stay hidden if presentation mode is still on
+      if (!document.getElementById('revamp-presentation-pill')) this.annotations.suspend(false);
+    }
+  }
+
+  private requestFrame = async (): Promise<string> => {
+    const response = await chrome.runtime.sendMessage({ type: 'CAPTURE_VISIBLE_TAB' });
+    if (!response?.success) throw new Error(response?.error || 'Screenshot capture failed');
+    return response.data as string;
+  };
+
+  /**
+   * Capture the page as a PNG download with all Revamp UI hidden
+   */
+  async takeScreenshot(fullPage: boolean): Promise<MessageResponse> {
+    try {
+      return await this.withCleanPage(async () => {
+        const { blob, truncated } = await captureScreenshot(fullPage, this.requestFrame);
+
+        const slug = (this.demo.getState().name || document.title || 'revamp-demo')
+          .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        downloadBlob(blob, `${slug || 'revamp-demo'}-${fullPage ? 'full' : 'view'}.png`);
+
+        return { success: true, data: { truncated } };
+      });
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /**
+   * Full-page screenshots for a handoff package: "after" shows the demo, "before" the original page
+   */
+  async captureHandoff(): Promise<MessageResponse> {
+    const toDataUrl = (blob: Blob) =>
+      new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error('Could not read screenshot'));
+        reader.readAsDataURL(blob);
+      });
+
+    try {
+      return await this.withCleanPage(async () => {
+        const after = await captureScreenshot(true, this.requestFrame);
+        let before: string | null = null;
+
+        const hasChanges = this.demo.getState().enabled && changeManager.getUndoStackSize() > 0;
+        if (hasChanges) {
+          this.demo.setEnabled(false);
+          try {
+            await new Promise(resolve => setTimeout(resolve, 300));
+            before = await toDataUrl((await captureScreenshot(true, this.requestFrame)).blob);
+          } finally {
+            this.demo.setEnabled(true);
+          }
+        }
+
+        return {
+          success: true,
+          data: { after: await toDataUrl(after.blob), before, truncated: after.truncated },
+        };
+      });
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /**
+   * Scroll to and outline one indexed element
+   */
+  locateElement(id: number, label: string): MessageResponse {
+    const result = this.previewOverlay.show(
+      [{ id: 'locate', selector: `revamp-id:${id}`, label: label.slice(0, 80) || `[${id}]` }],
+      selector => this.resolvePreviewSelector(selector)
+    );
+    window.clearTimeout(this.locateTimer);
+    this.locateTimer = window.setTimeout(() => this.previewOverlay.clear(), 2500);
+    return { success: true, data: { matches: result.matches, errors: result.errors } };
+  }
+
+  /** Resolves "revamp-id:N" targets through the page index, anything else as CSS/XPath */
+  private resolvePreviewSelector(selector: string): { elements: Element[]; error?: string } {
+    const match = selector.match(/^revamp-id:(\d+)$/);
+    if (match) {
+      const el = pageIndex.resolve(Number(match[1]));
+      return el ? { elements: [el] } : { elements: [], error: 'Element no longer exists on the page' };
+    }
+    return SelectorGenerator.query(selector);
+  }
+
+  /**
    * Preview changes without applying
    */
   async previewChanges(payload: ApplyRevampPayload): Promise<MessageResponse> {
@@ -1015,23 +1179,21 @@ class RevampInspector {
         return { success: false, error: 'No valid changes to preview' };
       }
 
-      // Highlight elements that will be changed
-      response.changes.forEach(change => {
-        const elements = document.querySelectorAll(change.selector);
-        elements.forEach(el => {
-          const htmlEl = el as HTMLElement;
-          htmlEl.style.outline = '2px dashed #3b82f6';
-          htmlEl.style.outlineOffset = '2px';
-          htmlEl.setAttribute('data-revamp-preview', change.id);
-          htmlEl.title = `[${change.action}] ${change.explanation}`;
-        });
-      });
+      const result = this.previewOverlay.show(
+        response.changes.map(change => ({
+          id: change.id,
+          selector: change.selector,
+          label: `[${change.action}] ${change.explanation || change.selector}`.slice(0, 80),
+        })),
+        selector => SelectorGenerator.query(selector)
+      );
 
       return {
         success: true,
         data: {
           message: `Previewing ${response.changes.length} changes`,
-          changes: response.changes
+          matches: result.matches,
+          errors: result.errors
         }
       };
 
@@ -1047,13 +1209,7 @@ class RevampInspector {
    * Clear preview highlights
    */
   clearPreview(): void {
-    document.querySelectorAll('[data-revamp-preview]').forEach(el => {
-      const htmlEl = el as HTMLElement;
-      htmlEl.style.outline = '';
-      htmlEl.style.outlineOffset = '';
-      htmlEl.removeAttribute('data-revamp-preview');
-      htmlEl.title = '';
-    });
+    this.previewOverlay.clear();
   }
 
   /**
@@ -1100,38 +1256,39 @@ class RevampInspector {
   private buildStableSelector(el: Element): string {
     if (!el || !(el instanceof Element)) return '';
 
-    // Prefer data-* attributes for stability
+    const isUnique = (sel: string) => {
+      try {
+        return document.querySelectorAll(sel).length === 1 && document.querySelector(sel) === el;
+      } catch {
+        return false;
+      }
+    };
+
+    // Prefer data-* attributes for stability, but only when they identify exactly this element
     const dataAttrs = ['data-testid', 'data-test', 'data-id', 'data-qa', 'data-cy', 'data-component'];
     for (const attr of dataAttrs) {
       const value = el.getAttribute(attr);
       if (value) {
-        return `[${attr}="${CSS.escape(value)}"]`;
+        const sel = `[${attr}="${CSS.escape(value)}"]`;
+        if (isUnique(sel)) return sel;
       }
     }
 
     // Try ID
     if (el.id) {
-      return `#${CSS.escape(el.id)}`;
+      const sel = `#${CSS.escape(el.id)}`;
+      if (isUnique(sel)) return sel;
     }
 
-    // Try classes (limit to 3)
+    // Try tag + classes (limit to 3), only if unique
     const classes = Array.from(el.classList).slice(0, 3);
     if (classes.length > 0) {
-      const classSelector = classes.map(c => `.${CSS.escape(c)}`).join('');
-      return `${el.tagName.toLowerCase()}${classSelector}`;
+      const sel = `${el.tagName.toLowerCase()}${classes.map(c => `.${CSS.escape(c)}`).join('')}`;
+      if (isUnique(sel)) return sel;
     }
 
-    // Fallback to tag + nth-of-type
-    const parent = el.parentElement;
-    if (parent) {
-      const siblings = Array.from(parent.children).filter(c => c.tagName === el.tagName);
-      const index = siblings.indexOf(el) + 1;
-      const parentSelector = this.buildStableSelector(parent);
-      const nthSelector = `${el.tagName.toLowerCase()}:nth-of-type(${index})`;
-      return parentSelector ? `${parentSelector} > ${nthSelector}` : nthSelector;
-    }
-
-    return el.tagName.toLowerCase();
+    // Fallback: unique structural path (nth-of-type chain, anchored at nearest unique id)
+    return SelectorGenerator.generate(el).selector;
   }
 
   /**

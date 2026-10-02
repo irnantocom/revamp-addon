@@ -1,106 +1,248 @@
-import { AIChange, ChangeResult, UndoEntry } from '../types/ai-response';
+import { AIChange, ChangeResult } from '../types/ai-response';
+import { Operation, OperationResult } from '../types/operations';
+import { HistoryItem, PersistedOperation } from '../types/demo';
+import { SelectorGenerator } from './selector-generator';
+import { applyOperation } from './operation-executor';
+import { PageIndex } from './page-index';
+import { captureLocator } from './locator';
 
 /**
- * Manages DOM changes dengan undo capability
+ * One applied change (possibly touching several elements) and how to undo it.
+ * Reverts hold references to the real nodes, so they still work after
+ * elements were removed or replaced and a selector would no longer match.
+ */
+interface HistoryEntry {
+  key: string;
+  changeId: string;
+  action: string;
+  label: string;
+  explanation: string;
+  revert: () => void;
+  /** Present for operations; lets the change be saved and replayed after a reload */
+  persisted?: PersistedOperation;
+  /** Elements the change acted on */
+  touched: Element[];
+  /** Elements only used as a position reference (e.g. "move before X"); they do not create a dependency */
+  references: Element[];
+  /** Elements the change created, e.g. a duplicated section */
+  created: Element[];
+}
+
+let keyCounter = 0;
+const nextKey = () => `h${Date.now().toString(36)}${(keyCounter++).toString(36)}`;
+
+/** Split an operation into its element references and the remaining arguments */
+function splitOperation(op: Operation): { args: Record<string, unknown> } {
+  const { id: _id, op: _op, target: _target, explanation: _explanation, ...rest } = op as Operation & {
+    ref?: number;
+  };
+  const { ref: _ref, ...args } = rest as Record<string, unknown>;
+  return { args };
+}
+
+/**
+ * Applies changes to the page and keeps the history that powers undo,
+ * per-change revert and saving a demo.
  */
 export class ChangeManager {
-  private undoStack: UndoEntry[] = [];
-  private maxUndoSize = 50;
+  private entries: HistoryEntry[] = [];
+  private maxEntries = 200;
+  private listeners = new Set<() => void>();
+
+  onChange(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private notify(): void {
+    this.listeners.forEach((l) => {
+      try {
+        l();
+      } catch (error) {
+        console.error('[ChangeManager] Listener failed:', error);
+      }
+    });
+  }
 
   /**
-   * Apply single change ke DOM
+   * Apply single selector-based change to the DOM (fallback path)
    */
   async applyChange(change: AIChange): Promise<ChangeResult> {
-    const elements = document.querySelectorAll(change.selector);
-    
+    const { elements, error } = SelectorGenerator.query(change.selector);
+
+    if (error) {
+      return { changeId: change.id, success: false, elementsAffected: 0, error };
+    }
+
     if (elements.length === 0) {
       return {
         changeId: change.id,
         success: false,
         elementsAffected: 0,
-        error: `No elements found for selector: ${change.selector}`
+        error: `No elements found for selector: ${change.selector}`,
       };
     }
 
-    const undoEntries: UndoEntry[] = [];
+    const reverts: Array<() => void> = [];
 
     try {
-      elements.forEach((element) => {
-        const el = element as HTMLElement;
-        
-        // Save state for undo
-        const undoEntry: UndoEntry = {
-          id: `undo-${Date.now()}-${Math.random()}`,
-          timestamp: Date.now(),
-          changeId: change.id,
-          selector: change.selector,
-          action: change.action,
-          previousState: this.captureState(el, change.action)
-        };
-        undoEntries.push(undoEntry);
-
-        // Apply change
-        this.applyToElement(el, change);
-      });
-
-      // Add to undo stack
-      undoEntries.forEach(entry => this.addToUndoStack(entry));
-
-      return {
-        changeId: change.id,
-        success: true,
-        elementsAffected: elements.length,
-        undoData: undoEntries[0]
-      };
-    } catch (error) {
-      console.error('[ChangeManager] Error applying change:', error);
+      for (const element of elements) {
+        reverts.push(this.applyToElement(element as HTMLElement, change));
+      }
+    } catch (err) {
+      // Roll back whatever was applied before the failure
+      reverts.reverse().forEach((revert) => this.safeRevert(revert));
+      console.error('[ChangeManager] Error applying change:', err);
       return {
         changeId: change.id,
         success: false,
         elementsAffected: 0,
-        error: error instanceof Error ? error.message : String(error)
+        error: err instanceof Error ? err.message : String(err),
       };
     }
+
+    this.push({
+      key: nextKey(),
+      changeId: change.id,
+      action: change.action,
+      label: `${change.action} ${change.selector}`,
+      explanation: change.explanation || '',
+      revert: () => reverts.slice().reverse().forEach((revert) => this.safeRevert(revert)),
+      touched: elements,
+      references: [],
+      created: [],
+    });
+
+    return {
+      changeId: change.id,
+      success: true,
+      elementsAffected: elements.length,
+    };
   }
 
   /**
-   * Apply multiple changes
+   * Apply multiple selector-based changes
    */
   async applyChanges(changes: AIChange[]): Promise<ChangeResult[]> {
     const results: ChangeResult[] = [];
-    
+
     for (const change of changes) {
-      const result = await this.applyChange(change);
-      results.push(result);
-      
-      // Stop on critical error if needed
-      if (!result.success && change.action === 'html') {
-        console.warn(`[ChangeManager] Stopping due to HTML change failure`);
-        break;
-      }
+      results.push(await this.applyChange(change));
     }
 
     return results;
   }
 
   /**
+   * Apply structured operations. Each operation is its own history entry, so a
+   * failing operation never blocks or rolls back the others.
+   */
+  applyOperations(operations: Operation[], index: PageIndex): OperationResult[] {
+    return operations.map((op) => this.applyOne(op, index));
+  }
+
+  private applyOne(op: Operation, index: PageIndex): OperationResult {
+    try {
+      // Capture locators before applying: afterwards the element's text/position may differ
+      const targetEl = index.resolve(op.target);
+      const refEl = op.op === 'move' ? index.resolve(op.ref) : null;
+      const persisted: PersistedOperation | undefined = targetEl
+        ? {
+            id: op.id,
+            op: op.op,
+            explanation: op.explanation,
+            target: captureLocator(targetEl),
+            ref: refEl ? captureLocator(refEl) : undefined,
+            args: splitOperation(op).args,
+          }
+        : undefined;
+
+      const { revert, created } = applyOperation(op, index);
+
+      this.push({
+        key: nextKey(),
+        changeId: op.id,
+        action: op.op,
+        label: op.op,
+        explanation: op.explanation,
+        revert,
+        persisted,
+        touched: targetEl ? [targetEl] : [],
+        references: refEl ? [refEl] : [],
+        created: created || [],
+      });
+      return { operationId: op.id, success: true };
+    } catch (error) {
+      return {
+        operationId: op.id,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /** What the history looks like to the UI */
+  list(): HistoryItem[] {
+    return this.entries.map((e) => ({
+      key: e.key,
+      op: (e.persisted?.op ?? 'custom') as HistoryItem['op'],
+      label: e.label,
+      explanation: e.explanation,
+      status: 'applied' as const,
+    }));
+  }
+
+  /** Operations that can be saved, in the order they were applied */
+  persistedOperations(): PersistedOperation[] {
+    return this.entries.map((e) => e.persisted).filter((p): p is PersistedOperation => !!p);
+  }
+
+  /**
    * Undo last change
    */
   undo(): boolean {
-    const entry = this.undoStack.pop();
+    const entry = this.entries.pop();
     if (!entry) return false;
 
-    try {
-      const elements = document.querySelectorAll(entry.selector);
-      elements.forEach(element => {
-        const el = element as HTMLElement;
-        this.restoreState(el, entry);
-      });
-      return true;
-    } catch (error) {
-      console.error('[ChangeManager] Error during undo:', error);
-      return false;
+    this.safeRevert(entry.revert);
+    this.notify();
+    return true;
+  }
+
+  /**
+   * Revert one change. Later changes that act on the same element (or inside
+   * something it created) are reverted first, since they build on it.
+   * Returns how many entries were reverted.
+   */
+  revertByKey(key: string): number {
+    const start = this.entries.findIndex((e) => e.key === key);
+    if (start === -1) return 0;
+
+    // Cascade: anything after `start` that builds on something already being reverted
+    const doomed = new Set<HistoryEntry>([this.entries[start]]);
+    for (let i = start + 1; i < this.entries.length; i++) {
+      const later = this.entries[i];
+      if ([...doomed].some((d) => this.entryDependsOn(later, d))) doomed.add(later);
     }
+
+    const ordered = this.entries.filter((e) => doomed.has(e));
+    ordered.slice().reverse().forEach((e) => this.safeRevert(e.revert));
+    this.entries = this.entries.filter((e) => !doomed.has(e));
+    this.notify();
+    return ordered.length;
+  }
+
+  /**
+   * True if `later` builds on `earlier`: it acts on the same element, or on/near something
+   * `earlier` created. Merely using an element as a position reference is not a dependency.
+   */
+  private entryDependsOn(later: HistoryEntry, earlier: HistoryEntry): boolean {
+    return (
+      later.touched.some((el) => earlier.touched.includes(el)) ||
+      [...later.touched, ...later.references].some((el) =>
+        earlier.created.some((c) => c === el || c.contains(el))
+      )
+    );
   }
 
   /**
@@ -108,9 +250,12 @@ export class ChangeManager {
    */
   undoAll(): number {
     let count = 0;
-    while (this.undoStack.length > 0) {
-      if (this.undo()) count++;
+    while (this.entries.length > 0) {
+      const entry = this.entries.pop()!;
+      this.safeRevert(entry.revert);
+      count++;
     }
+    if (count > 0) this.notify();
     return count;
   }
 
@@ -118,160 +263,122 @@ export class ChangeManager {
    * Get undo stack size
    */
   getUndoStackSize(): number {
-    return this.undoStack.length;
+    return this.entries.length;
   }
 
   /**
-   * Capture element state untuk undo
+   * Apply a change to one element and return the function that reverts it
    */
-  private captureState(el: HTMLElement, action: string): UndoEntry['previousState'] {
-    const state: UndoEntry['previousState'] = {};
-
-    switch (action) {
-      case 'css':
-        state.styles = {};
-        // Capture inline styles
-        for (let i = 0; i < el.style.length; i++) {
-          const prop = el.style[i];
-          state.styles[prop] = el.style.getPropertyValue(prop);
-        }
-        break;
-
-      case 'html':
-      case 'insert':
-      case 'remove':
-        state.html = el.outerHTML;
-        break;
-
-      case 'text':
-        state.text = el.textContent || '';
-        break;
-
-      case 'attribute':
-        state.attributes = {};
-        Array.from(el.attributes).forEach(attr => {
-          state.attributes![attr.name] = attr.value;
-        });
-        break;
-    }
-
-    return state;
-  }
-
-  /**
-   * Apply change to single element
-   */
-  private applyToElement(el: HTMLElement, change: AIChange): void {
+  private applyToElement(el: HTMLElement, change: AIChange): () => void {
     switch (change.action) {
-      case 'css':
-        if (typeof change.value === 'object') {
-          Object.entries(change.value).forEach(([prop, val]) => {
-            el.style.setProperty(
-              prop.replace(/([A-Z])/g, '-$1').toLowerCase(),
-              val as string
-            );
-          });
+      case 'css': {
+        if (typeof change.value !== 'object' || change.value === null) {
+          throw new Error('css change requires an object value');
         }
-        break;
-
-      case 'html':
-        el.innerHTML = change.value;
-        break;
-
-      case 'text':
-        el.textContent = change.value;
-        break;
-
-      case 'attribute':
-        if (change.attribute) {
-          el.setAttribute(change.attribute, change.value);
-        }
-        break;
-
-      case 'remove':
-        el.remove();
-        break;
-
-      case 'insert':
-        const template = document.createElement('template');
-        template.innerHTML = change.value.trim();
-        const newElement = template.content.firstChild;
-        
-        if (newElement) {
-          switch (change.position) {
-            case 'before':
-              el.parentNode?.insertBefore(newElement, el);
-              break;
-            case 'after':
-              el.parentNode?.insertBefore(newElement, el.nextSibling);
-              break;
-            case 'prepend':
-              el.insertBefore(newElement, el.firstChild);
-              break;
-            case 'append':
-            default:
-              el.appendChild(newElement);
-              break;
+        const previous = new Map<string, { value: string; priority: string }>();
+        Object.entries(change.value).forEach(([prop, val]) => {
+          const cssProp = prop.startsWith('--') ? prop : prop.replace(/([A-Z])/g, '-$1').toLowerCase();
+          if (!previous.has(cssProp)) {
+            previous.set(cssProp, {
+              value: el.style.getPropertyValue(cssProp),
+              priority: el.style.getPropertyPriority(cssProp),
+            });
           }
-        }
-        break;
-    }
-  }
-
-  /**
-   * Restore element state from undo entry
-   */
-  private restoreState(el: HTMLElement, entry: UndoEntry): void {
-    switch (entry.action) {
-      case 'css':
-        if (entry.previousState.styles) {
-          // Clear current inline styles
-          el.removeAttribute('style');
-          // Restore previous styles
-          Object.entries(entry.previousState.styles).forEach(([prop, val]) => {
-            el.style.setProperty(prop, val);
+          el.style.setProperty(cssProp, String(val));
+        });
+        return () => {
+          previous.forEach((old, prop) => {
+            if (old.value) el.style.setProperty(prop, old.value, old.priority);
+            else el.style.removeProperty(prop);
           });
-        }
-        break;
+        };
+      }
 
       case 'html':
-      case 'remove':
-        if (entry.previousState.html) {
-          el.outerHTML = entry.previousState.html;
-        }
-        break;
+      case 'text': {
+        const previousNodes = Array.from(el.childNodes);
+        if (change.action === 'html') el.innerHTML = change.value;
+        else el.textContent = change.value;
+        return () => el.replaceChildren(...previousNodes);
+      }
 
-      case 'text':
-        if (entry.previousState.text !== undefined) {
-          el.textContent = entry.previousState.text;
-        }
-        break;
+      case 'attribute': {
+        const name = change.attribute;
+        if (!name) throw new Error('attribute change requires an attribute name');
+        if (/^on/i.test(name)) throw new Error(`Refusing to set event handler attribute: ${name}`);
+        const previous = el.getAttribute(name);
+        el.setAttribute(name, change.value);
+        return () => {
+          if (previous === null) el.removeAttribute(name);
+          else el.setAttribute(name, previous);
+        };
+      }
 
-      case 'attribute':
-        if (entry.previousState.attributes) {
-          // Remove all current attributes
-          Array.from(el.attributes).forEach(attr => {
-            el.removeAttribute(attr.name);
-          });
-          // Restore previous attributes
-          Object.entries(entry.previousState.attributes).forEach(([name, value]) => {
-            el.setAttribute(name, value);
-          });
+      case 'remove': {
+        const parent = el.parentNode;
+        const next = el.nextSibling;
+        el.remove();
+        return () => {
+          if (parent) parent.insertBefore(el, next);
+        };
+      }
+
+      case 'insert': {
+        const template = document.createElement('template');
+        template.innerHTML = String(change.value).trim();
+        const inserted = Array.from(template.content.childNodes);
+        if (inserted.length === 0) throw new Error('insert change has no content');
+
+        const parent = el.parentNode;
+        const next = el.nextSibling;
+        let replaced = false;
+
+        switch (change.position) {
+          case 'before':
+            parent?.insertBefore(template.content, el);
+            break;
+          case 'after':
+            parent?.insertBefore(template.content, next);
+            break;
+          case 'replace':
+            parent?.insertBefore(template.content, el);
+            el.remove();
+            replaced = true;
+            break;
+          case 'prepend':
+            el.insertBefore(template.content, el.firstChild);
+            break;
+          case 'append':
+          default:
+            el.appendChild(template.content);
+            break;
         }
-        break;
+
+        return () => {
+          inserted.forEach((node) => node.parentNode?.removeChild(node));
+          if (replaced && parent) parent.insertBefore(el, next);
+        };
+      }
+
+      default:
+        throw new Error(`Unknown action: ${change.action}`);
     }
   }
 
-  /**
-   * Add entry to undo stack dengan size limit
-   */
-  private addToUndoStack(entry: UndoEntry): void {
-    this.undoStack.push(entry);
-    
-    // Trim stack if exceeds max size
-    while (this.undoStack.length > this.maxUndoSize) {
-      this.undoStack.shift();
+  private safeRevert(revert: () => void): void {
+    try {
+      revert();
+    } catch (error) {
+      console.error('[ChangeManager] Revert step failed:', error);
     }
+  }
+
+  private push(entry: HistoryEntry): void {
+    this.entries.push(entry);
+    while (this.entries.length > this.maxEntries) {
+      this.entries.shift();
+    }
+    this.notify();
   }
 }
 

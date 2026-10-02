@@ -4,13 +4,16 @@ import ElementEditor from './components/ElementEditor';
 import ExportPanel from './components/ExportPanel';
 import AIChatBox from './components/AIChatBox';
 import Settings from './components/Settings';
+import DemoPanel from './components/DemoPanel';
 import { InspectedElement } from '../types/inspector';
 
-type Tab = 'inspector' | 'editor' | 'ai' | 'export' | 'settings';
+type Tab = 'inspector' | 'editor' | 'ai' | 'demo' | 'export' | 'settings';
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('inspector');
   const [selectedElement, setSelectedElement] = useState<InspectedElement | null>(null);
+  // Prompt handed from another tab (e.g. notes) to the AI chat input
+  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
 
   useEffect(() => {
     // Listen for element selection from content script
@@ -71,6 +74,16 @@ const App: React.FC = () => {
           AI Chat
         </button>
         <button
+          onClick={() => setActiveTab('demo')}
+          className={`flex-1 py-3 px-2 text-xs font-medium whitespace-nowrap ${
+            activeTab === 'demo'
+              ? 'border-b-2 border-blue-600 text-blue-600'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          Demo
+        </button>
+        <button
           onClick={() => setActiveTab('export')}
           className={`flex-1 py-3 px-2 text-xs font-medium whitespace-nowrap ${
             activeTab === 'export'
@@ -105,6 +118,16 @@ const App: React.FC = () => {
           <AIChatBox
             selectedElement={selectedElement}
             onClear={() => setSelectedElement(null)}
+            initialPrompt={pendingPrompt}
+            onPromptConsumed={() => setPendingPrompt(null)}
+          />
+        )}
+        {activeTab === 'demo' && (
+          <DemoPanel
+            onAskAI={(prompt) => {
+              setPendingPrompt(prompt);
+              setActiveTab('ai');
+            }}
           />
         )}
         {activeTab === 'export' && <ExportPanel />}

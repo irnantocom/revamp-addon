@@ -33,6 +33,7 @@ export class HighlightOverlay {
     // Create main overlay
     this.overlay = document.createElement('div');
     this.overlay.id = 'revamp-highlight-overlay';
+    this.overlay.setAttribute('data-revamp-ui', 'true');
     this.overlay.style.cssText = `
       position: absolute;
       pointer-events: none;
@@ -46,6 +47,7 @@ export class HighlightOverlay {
     // Create label
     this.label = document.createElement('div');
     this.label.id = 'revamp-highlight-label';
+    this.label.setAttribute('data-revamp-ui', 'true');
     this.label.style.cssText = `
       position: absolute;
       top: -24px;
@@ -143,5 +145,86 @@ export class HighlightOverlay {
    */
   exists(): boolean {
     return this.overlay !== null && document.body.contains(this.overlay);
+  }
+}
+
+export interface PreviewTarget {
+  id: string;
+  selector: string;
+  label: string;
+}
+
+export interface PreviewResult {
+  matches: Record<string, number>;
+  errors: Record<string, string>;
+}
+
+/**
+ * Draws dashed boxes over every element a proposed change would touch.
+ * Lives in its own container so the page's own styles and titles are never modified.
+ */
+export class PreviewOverlay {
+  private container: HTMLDivElement | null = null;
+
+  show(
+    targets: PreviewTarget[],
+    query: (selector: string) => { elements: Element[]; error?: string }
+  ): PreviewResult {
+    this.clear();
+
+    const result: PreviewResult = { matches: {}, errors: {} };
+    const container = document.createElement('div');
+    container.id = 'revamp-preview-overlay';
+    container.setAttribute('data-revamp-ui', 'true');
+    container.style.cssText =
+      'position:absolute;top:0;left:0;width:0;height:0;pointer-events:none;z-index:2147483646;';
+
+    let first: Element | null = null;
+
+    for (const target of targets) {
+      const { elements, error } = query(target.selector);
+      if (error) result.errors[target.id] = error;
+      result.matches[target.id] = elements.length;
+
+      for (const el of elements) {
+        if (!first) first = el;
+        const rect = el.getBoundingClientRect();
+        const box = document.createElement('div');
+        box.style.cssText = `
+          position:absolute;
+          top:${rect.top + window.scrollY}px;
+          left:${rect.left + window.scrollX}px;
+          width:${rect.width}px;
+          height:${rect.height}px;
+          outline:2px dashed #3b82f6;
+          outline-offset:2px;
+          background:rgba(59,130,246,0.08);
+          box-sizing:border-box;
+        `;
+        const tag = document.createElement('div');
+        tag.textContent = target.label;
+        tag.style.cssText = `
+          position:absolute;top:0;left:0;transform:translateY(-100%);
+          padding:2px 6px;background:#3b82f6;color:#fff;
+          font:11px/1.4 monospace;white-space:nowrap;border-radius:3px;
+        `;
+        box.appendChild(tag);
+        container.appendChild(box);
+      }
+    }
+
+    document.documentElement.appendChild(container);
+    this.container = container;
+
+    if (first) {
+      first.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+    }
+
+    return result;
+  }
+
+  clear(): void {
+    this.container?.remove();
+    this.container = null;
   }
 }
