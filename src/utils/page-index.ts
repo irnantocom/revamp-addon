@@ -17,11 +17,17 @@ const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'template', 'svg', 'he
 
 const MAX_ENTRIES = 400;
 const TEXT_PREVIEW = 80;
+/** Editable text is shown in full up to this length, so the AI can rewrite or translate all of it */
+const TEXT_FULL = 800;
+/** Once the index has used this many characters, remaining text falls back to short previews */
+const TEXT_BUDGET = 40000;
 
 export class PageIndex {
   private ids = new WeakMap<Element, number>();
   private refs = new Map<number, WeakRef<Element>>();
   private nextId = 1;
+  /** Characters of full text emitted during the current build() */
+  private textUsed = 0;
   /** Elements hidden by Revamp itself, so they stay listed (and can be shown again) */
   private hiddenByRevamp = new WeakSet<Element>();
 
@@ -53,6 +59,7 @@ export class PageIndex {
   build(root: Element): { text: string; count: number; truncated: boolean } {
     const lines: string[] = [];
     let truncated = false;
+    this.textUsed = 0;
 
     const walk = (el: Element, depth: number) => {
       if (lines.length >= MAX_ENTRIES) {
@@ -153,7 +160,7 @@ export class PageIndex {
 
     if (tag === 'a') {
       const href = el.getAttribute('href') || '';
-      return `[${this.idOf(el)}] a "${this.clip(this.ownText(el), TEXT_PREVIEW)}" href="${this.clip(href, 100)}"${flags}`;
+      return `[${this.idOf(el)}] a "${this.editableText(el)}" href="${this.clip(href, 100)}"${flags}`;
     }
 
     if (LANDMARK_TAGS.has(tag) || this.isSectionCandidate(el)) {
@@ -167,12 +174,12 @@ export class PageIndex {
     if (TEXT_TAGS.has(tag)) {
       const text = this.ownText(el);
       if (!text) return null;
-      return `[${this.idOf(el)}] ${tag} "${this.clip(text, TEXT_PREVIEW)}"${flags}`;
+      return `[${this.idOf(el)}] ${tag} "${this.editableText(el)}"${flags}`;
     }
 
     // Generic containers (div, etc.) that hold their own text, e.g. <div>Welcome</div>
     if (this.hasDirectText(el)) {
-      return `[${this.idOf(el)}] ${tag} "${this.clip(this.ownText(el), TEXT_PREVIEW)}"${flags}`;
+      return `[${this.idOf(el)}] ${tag} "${this.editableText(el)}"${flags}`;
     }
 
     return null;
@@ -205,6 +212,21 @@ export class PageIndex {
 
   private ownText(el: Element): string {
     return (el.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  /**
+   * Text of an editable element. Shown in full so rewrites/translations cover all of it;
+   * when it has to be cut, the marker says so and how long the original is.
+   */
+  private editableText(el: Element): string {
+    const text = this.ownText(el).replace(/"/g, "'");
+    const limit = this.textUsed < TEXT_BUDGET ? TEXT_FULL : TEXT_PREVIEW;
+    if (text.length <= limit) {
+      this.textUsed += text.length;
+      return text;
+    }
+    this.textUsed += limit;
+    return `${text.slice(0, limit)} …[TRUNCATED: ${text.length} chars total]`;
   }
 
   private clip(text: string, max: number): string {

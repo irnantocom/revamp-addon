@@ -25,6 +25,7 @@ const Settings: React.FC = () => {
     apiVersion: '2024-12-01-preview',
     deployment: '',
   });
+  const [azureTest, setAzureTest] = useState<{ busy: boolean; ok?: boolean; message?: string }>({ busy: false });
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
 
@@ -67,6 +68,25 @@ const Settings: React.FC = () => {
       console.error('[Settings] Failed to save:', error);
       alert('Failed to save settings');
       setSaveStatus('idle');
+    }
+  };
+
+  // Save, then make a real request so endpoint/deployment/key problems show up here, not in chat
+  const testAzure = async () => {
+    setAzureTest({ busy: true });
+    try {
+      await chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', payload: { apiKeys, azure } });
+      const response = await chrome.runtime.sendMessage({
+        type: 'VALIDATE_API_KEY',
+        payload: { provider: 'azure', apiKey: apiKeys.azure || '' },
+      });
+      setAzureTest({
+        busy: false,
+        ok: !!response?.data?.isValid,
+        message: response?.data?.message || response?.error,
+      });
+    } catch (error) {
+      setAzureTest({ busy: false, ok: false, message: String(error) });
     }
   };
 
@@ -152,6 +172,18 @@ const Settings: React.FC = () => {
                   placeholder="API version: 2024-12-01-preview"
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
+                <button
+                  onClick={testAzure}
+                  disabled={azureTest.busy}
+                  className="w-full border border-gray-300 rounded-lg py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+                >
+                  {azureTest.busy ? 'Testing...' : 'Test Azure connection'}
+                </button>
+                {azureTest.message && (
+                  <p className={`text-xs break-words ${azureTest.ok ? 'text-green-700' : 'text-red-600'}`}>
+                    {azureTest.message}
+                  </p>
+                )}
               </div>
             )}
           </div>

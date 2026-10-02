@@ -334,7 +334,8 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
             },
           ],
           options: {
-            maxTokens: model.includes('2.5') || model.includes('2.0') ? 8192 : 4096,
+            // Translating or rewriting a whole page needs room: every changed text is returned in full
+            maxTokens: provider === 'azure' || /2\.5|2\.0|gpt-4o|gpt-4\.1/.test(model) ? 8192 : 4096,
             temperature: 0.3,
           },
         },

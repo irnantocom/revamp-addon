@@ -203,3 +203,29 @@ describe('parseOperationsResponse', () => {
     expect(parseOperationsResponse('```json\n{"operations":[]}\n```')).toBeNull();
   });
 });
+
+describe('PageIndex text for AI', () => {
+  it('shows long paragraphs in full so rewrites are not cut off', () => {
+    const long = 'Diakui sebagai ibu kota furnitur China, Foshan adalah rumah bagi ribuan pabrik. '.repeat(6).trim();
+    document.body.innerHTML = `<h1>Title</h1><p id="p">${long}</p>`;
+    const text = new PageIndex().build(document.body).text;
+    expect(text).toContain(long);
+    expect(text).not.toContain('…');
+  });
+
+  it('marks text it had to cut instead of silently shortening it', () => {
+    const huge = 'word '.repeat(400).trim();
+    document.body.innerHTML = `<p>${huge}</p>`;
+    const text = new PageIndex().build(document.body).text;
+    expect(text).toContain('TRUNCATED');
+    expect(text).toContain(`${huge.length} chars total`);
+  });
+
+  it('falls back to short previews after the text budget is used', () => {
+    const para = 'x'.repeat(700);
+    document.body.innerHTML = Array.from({ length: 80 }, () => `<p>${para}</p>`).join('');
+    const { text } = new PageIndex().build(document.body);
+    expect(text.length).toBeLessThan(80 * 700);
+    expect(text).toContain('TRUNCATED');
+  });
+});

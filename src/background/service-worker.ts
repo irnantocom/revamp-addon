@@ -23,25 +23,29 @@ interface MessageResponse {
 // Handle extension icon click to toggle floating panel
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab.id) return;
-  
+  const tabId = tab.id;
+  const toggle = () => chrome.tabs.sendMessage(tabId, { type: 'TOGGLE_PANEL' });
+
   try {
-    // Send message to content script to toggle panel
-    await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_PANEL' });
+    await toggle();
+    return;
+  } catch {
+    // No content script in this tab yet: it was opened before the extension was
+    // installed/reloaded, or the page is one extensions cannot access.
+  }
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['content/content-script.js'],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await toggle();
   } catch (error) {
-    console.error('[Background] Failed to toggle panel:', error);
-    // If content script not loaded, inject it
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: ['content/content-script.js'],
-      });
-      // Wait and try again
-      setTimeout(async () => {
-        await chrome.tabs.sendMessage(tab.id!, { type: 'TOGGLE_PANEL' });
-      }, 500);
-    } catch (injectError) {
-      console.error('[Background] Failed to inject content script:', injectError);
-    }
+    console.warn(
+      '[Background] Cannot open the panel on this page. Reload the tab, or use a regular http(s) page (browser pages like chrome:// are not supported).',
+      error
+    );
   }
 });
 
@@ -303,6 +307,23 @@ async function handleValidateApiKey(
       case 'claude':
         isValid = await validateClaudeKey(payload.apiKey);
         break;
+      case 'azure': {
+        // A real request is the only way to know the endpoint, deployment and key work together
+        const stored = await chrome.storage.local.get('settings');
+        const azure = stored.settings?.azure || {};
+        if (!azure.endpoint || !azure.apiVersion || !azure.deployment) {
+          sendResponse({ success: true, data: { isValid: false, message: 'Fill in endpoint, deployment and API version first.' } });
+          return;
+        }
+        const result = await new AzureOpenAIProvider({
+          apiKey: payload.apiKey,
+          endpoint: azure.endpoint,
+          apiVersion: azure.apiVersion,
+          deployment: azure.deployment,
+        }).generateCompletion([{ role: 'user', content: 'ping' }], azure.deployment, { maxTokens: 8, temperature: 0 });
+        sendResponse({ success: true, data: { isValid: result.success, message: result.success ? 'Connected.' : result.error } });
+        return;
+      }
       default:
         // Assume valid for other providers (can't easily validate)
         isValid = payload.apiKey.length > 10;

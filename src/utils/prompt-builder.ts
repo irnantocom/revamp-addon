@@ -18,7 +18,7 @@ export function buildSystemPrompt(data: PageIndexData | null): string {
     ? `PAGE: "${data.title}" (${data.url})
 SCOPE: ${data.mode === 'page' ? 'whole page' : `selected element [${data.rootId}] <${data.rootTag}> and its descendants`}
 
-PAGE INDEX (${data.count} elements${data.truncated ? ', truncated' : ''}). Format: [id] tag "text". Indentation = nesting. "(HIDDEN)" = currently hidden by the user.
+PAGE INDEX (${data.count} elements${data.truncated ? ', truncated' : ''}). Format: [id] tag "text". Indentation = nesting. "(HIDDEN)" = currently hidden by the user. Text is shown in full unless it ends with …[TRUNCATED: N chars total].
 ${data.index || '(empty)'}`
     : 'No page index available. Do not invent element ids; reply with a short explanation and an empty operations list.';
 
@@ -47,7 +47,10 @@ RULES:
 4. Hiding is reversible and preferred over remove when the user says "hide".
 5. Write new copy in the language the user used or asked for.
 6. Keep every "explanation" under 10 words.
-7. If the request cannot be done with these operations, return an empty "operations" list and say why in "explanation".
+7. When you rewrite or translate text, return the COMPLETE new text for that element. Never shorten it, never use "..." or "…" as a stand-in for the rest. Cover every element that holds text the user asked you to change.
+8. If an element's text ends with …[TRUNCATED: N chars total], you cannot see all of it: do not rewrite that element, and say so in "warnings".
+9. set_text replaces everything inside the element, including links and bold text. For an element that contains links, keep its wording and link text intact unless the user asked to change them.
+10. If the request cannot be done with these operations, return an empty "operations" list and say why in "explanation".
 
 OUTPUT: respond with ONE JSON object in a \`\`\`json code block, nothing else needed:
 
