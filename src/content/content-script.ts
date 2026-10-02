@@ -174,6 +174,10 @@ class RevampInspector {
           sendResponse({ success: true });
           break;
 
+        case 'ANNOTATION_NOTES_CONTEXT':
+          sendResponse({ success: true, data: this.demo.openNotesWithContext() });
+          break;
+
         case 'ANNOTATION_UPDATE':
           sendResponse({
             success: this.demo.updateAnnotation(String(message.id), {

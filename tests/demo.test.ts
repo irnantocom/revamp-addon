@@ -242,3 +242,27 @@ describe('annotations', () => {
     expect(document.querySelector('h1')!.textContent).toBe('Welcome');
   });
 });
+
+describe('notes for the AI', () => {
+  it('includes the full text of the annotated element and ids of its children', () => {
+    const long = 'Diakui sebagai ibu kota furnitur China, Foshan adalah rumah bagi ribuan pabrik. '.repeat(5).trim();
+    document.body.innerHTML = `<section id="s"><h2>Title</h2><p id="para">${long}</p></section>`;
+    make();
+    demo.addAnnotation(document.querySelector('#para')!, 'Translate to Indonesian');
+    demo.addAnnotation(document.querySelector('#s')!, 'Make friendlier');
+    const done = demo.addAnnotation(document.querySelector('h2')!, 'Already done');
+    demo.updateAnnotation(done.id, { resolved: true });
+
+    const notes = demo.openNotesWithContext();
+    expect(notes).toHaveLength(2);
+
+    const paragraph = notes[0];
+    expect(paragraph.context).toContain(long);
+    expect(paragraph.context).toContain(`[${paragraph.elementId}] p`);
+
+    // A section note carries its children with their own ids, so the AI can edit them
+    const section = notes[1];
+    expect(section.context).toContain(long);
+    expect(section.context).toMatch(/\[\d+\] h2 "Title"/);
+  });
+});

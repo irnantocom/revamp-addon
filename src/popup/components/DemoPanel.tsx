@@ -227,14 +227,26 @@ const DemoPanel: React.FC<Props> = ({ onAskAI }) => {
     await send({ type: 'ANNOTATION_VISIBLE', visible });
   };
 
-  const askAIToApplyNotes = () => {
-    const open = (state?.annotations || []).filter((n) => !n.resolved && n.found && n.elementId);
-    if (open.length === 0) {
+  const askAIToApplyNotes = async () => {
+    const response = await send<{
+      success: boolean;
+      data?: Array<AnnotationInfo & { tag: string; context: string }>;
+    }>({ type: 'ANNOTATION_NOTES_CONTEXT' });
+    const notes = response?.data || [];
+    if (notes.length === 0) {
       setNotice('No open notes with a findable element.');
       return;
     }
-    const lines = open.map((n) => `- [${n.elementId}] (${n.elementLabel}): ${n.text}`);
-    onAskAI?.(`Apply these client notes to the page. Each note is attached to the element id shown in brackets:\n${lines.join('\n')}`);
+
+    // Each note carries the complete current content of its element, with ids the AI can target
+    const blocks = notes.map(
+      (n) =>
+        `NOTE ${n.number} — attached to element [${n.elementId}] <${n.tag}>:\n"${n.text}"\n` +
+        `Current content of that element (ids in brackets are the only valid targets):\n${n.context}`
+    );
+    onAskAI?.(
+      `Apply these client notes to the page. Return complete new text for anything you change; never shorten it.\n\n${blocks.join('\n\n')}`
+    );
   };
 
   const exportHandoff = async () => {

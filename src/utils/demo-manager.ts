@@ -134,6 +134,28 @@ export class DemoManager {
     });
   }
 
+  /**
+   * Open notes together with the full content of the element each one is attached to,
+   * indexed with element ids, so an AI request can act on the real text (not a short label).
+   */
+  openNotesWithContext(): Array<AnnotationInfo & { tag: string; context: string }> {
+    const MAX_CONTEXT = 6000;
+    return this.listAnnotations()
+      .filter((n) => !n.resolved && n.found && n.elementId !== undefined)
+      .map((n) => {
+        const el = this.index.resolve(n.elementId!)!;
+        const tag = el.tagName.toLowerCase();
+        const { text } = this.index.build(el);
+        // Containers without a line of their own still need their id in the context
+        const body = text.includes(`[${n.elementId}]`) ? text : `[${n.elementId}] ${tag}\n${text}`;
+        return {
+          ...n,
+          tag,
+          context: body.length > MAX_CONTEXT ? `${body.slice(0, MAX_CONTEXT)}\n…[context truncated]` : body,
+        };
+      });
+  }
+
   addAnnotation(el: Element, text: string): Annotation {
     const annotation: Annotation = {
       id: `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
