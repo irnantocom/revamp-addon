@@ -4,8 +4,13 @@ dist
 .DS_Store
 .env
 .env.local
-.zip
+*.zip
 .vscode
 .github
 /*.md
 !/README.md
+!/ARCHITECTURE.md
+!/CLAUDE.md
+!/design.md
+!/PRD.md
+!/TASKS.md
