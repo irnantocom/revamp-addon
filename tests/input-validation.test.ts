@@ -141,3 +141,55 @@ describe('legacy selector changes use the same protections', () => {
     expect(result.success).toBe(false);
   });
 });
+
+describe('SVG in set_html', () => {
+  const insert = (html: string) => {
+    run({ ...base, op: 'set_html', target: idOf('#about'), html });
+    return document.querySelector('#about')!;
+  };
+
+  it.each([
+    ['href', '<svg><a><animate attributeName="href" values="javascript:alert(1)"/><text>x</text></a></svg>'],
+    ['xlink:href on <set>', '<svg><a><set attributeName="xlink:href" to="javascript:alert(1)"/><text>x</text></a></svg>'],
+    ['upper case and spaces', '<svg><a><animate attributeName=" HREF " values="javascript:alert(1)"/><text>x</text></a></svg>'],
+    ['event handler on <animate>', '<svg><a><animate attributeName="onclick" to="alert(1)"/><text>x</text></a></svg>'],
+    ['event handler on <set>', '<svg><a><set attributeName="onmouseover" to="alert(1)"/><text>x</text></a></svg>'],
+    ['unsafe URL in a later value', '<svg><a><animate attributeName="fill" values="red;java&#9;script:alert(1)"/><text>x</text></a></svg>'],
+    ['unsafe URL in "to"', '<svg><a><set attributeName="fill" to="javascript:alert(1)"/><text>x</text></a></svg>'],
+  ])('removes an animation that sets %s', (_label, html) => {
+    const about = insert(html);
+    expect(about.querySelector('animate, set')).toBeNull();
+    expect(about.querySelector('text')).not.toBeNull();
+  });
+
+  it('keeps harmless animations (spinners, logos)', () => {
+    const about = insert(
+      '<svg><circle r="5"><animate attributeName="r" values="5;10;5" dur="1s" repeatCount="indefinite"/></circle>' +
+        '<rect><animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="2s"/></rect>' +
+        '<circle><set attributeName="fill" to="red" begin="0s"/></circle>' +
+        '<g><animateMotion path="M0,0 L10,10" dur="1s"/></g></svg>'
+    );
+    expect(about.querySelector('animate')).not.toBeNull();
+    expect(about.querySelector('animateTransform')).not.toBeNull();
+    expect(about.querySelector('set')).not.toBeNull();
+    expect(about.querySelector('animateMotion')).not.toBeNull();
+  });
+
+  it('removes foreignObject together with what is inside it, and keeps the rest of the SVG', () => {
+    const about = insert('<svg><foreignObject><div>hi</div></foreignObject><circle r="3"/></svg>');
+    expect(about.querySelector('foreignObject')).toBeNull();
+    expect(about.textContent).not.toContain('hi');
+    expect(about.querySelector('circle')).not.toBeNull();
+  });
+
+  it('applies the same rules to the legacy insert path', async () => {
+    await manager.applyChange({
+      id: 'c', action: 'insert', selector: '#about', position: 'append', explanation: '',
+      value: '<svg><a><animate attributeName="href" values="javascript:1"/><foreignObject><b>x</b></foreignObject></a></svg>',
+    });
+    const about = document.querySelector('#about')!;
+    expect(about.querySelector('animate')).toBeNull();
+    expect(about.querySelector('foreignObject')).toBeNull();
+  });
+});
+

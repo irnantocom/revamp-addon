@@ -2,7 +2,7 @@
 
 Status of delivered work and the open backlog. Product intent is in [PRD.md](PRD.md). Update this file when a task starts, finishes or is dropped.
 
-Last verified: `npm test` 140 passed (10 files), `npm run type-check` clean.
+Last verified: `npm test` 150 passed (10 files), `npm run type-check` clean.
 
 ## Delivered
 
@@ -15,7 +15,7 @@ Last verified: `npm test` 140 passed (10 files), `npm run type-check` clean.
 | 4. Notes and handoff | Notes pinned to elements; "Ask AI to apply open notes"; handoff ZIP (`report.md`, `report.html`, `demo.json`, before/after PNG) | |
 | Providers | OpenAI, Azure OpenAI, Claude, Gemini adapters; Azure endpoint, deployment and API-version settings with a real validation request | |
 | Cleanup | Removed outdated markdown files; consolidated docs into six files; panel footer no longer says "Phase 2"; `*.zip` is ignored and `extention-v1.zip` is untracked | |
-| Input validation | Control-character bypass of the `javascript:` check closed; attribute names validated (`srcdoc`, `on*`, `data-revamp-*` refused); invalid CSS values fail loudly instead of being ignored; legacy `insert`/`html` changes sanitized; panel shows the real error for edits; Update Text asks for confirmation when the element has child elements | See `tests/input-validation.test.ts` |
+| Input validation | Control-character bypass of the `javascript:` check closed; attribute names validated (`srcdoc`, `on*`, `data-revamp-*` refused); invalid CSS values fail loudly instead of being ignored; legacy `insert`/`html` changes sanitized; panel shows the real error for edits; Update Text asks for confirmation when the element has child elements; `foreignObject` and dangerous SVG animations removed from inserted HTML | See `tests/input-validation.test.ts` |
 | Recent fixes | Editor tab keeps style field values after Apply Style and refreshes the attribute list (including `style`) after each edit; Inspector reads full element text; notes sent to the AI with the element's full content (not a 40-character label); export uses current images after a change; HTML and CSS export | See `git log` |
 
 ## Backlog
@@ -53,7 +53,6 @@ Priority: **P0** blocks release, **P1** next, **P2** later.
 - [ ] **P2** Visual regression check of the exported page against the live page on a few reference sites.
 
 ### Security
-- [ ] **P2** Extend `sanitizeHtml` to SVG animation elements (`animate`, `set`) and `foreignObject`.
 - [ ] **P1** Evaluate encrypting API keys at rest or routing through a team proxy.
 - [ ] **P2** Review the `web_accessible_resources` entries (`content/*`, `popup/*` for all URLs) and narrow them if possible.
 

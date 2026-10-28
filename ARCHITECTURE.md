@@ -84,7 +84,7 @@ APPLY_OPERATIONS ───────────────────► ap
 
 **Safety rules**
 - Operations not in the catalog are rejected by the parser.
-- `set_html` (and the legacy `html` / `insert` changes) go through `sanitizeHtml`: `script, style, iframe, object, embed, link, meta, base, form` are removed, `on*` attributes are dropped, and `javascript:`, `vbscript:` and `data:text/html` URLs are dropped. URL checks ignore tabs, newlines and other control characters, because browsers do too (`java<TAB>script:` is still `javascript:`).
+- `set_html` (and the legacy `html` / `insert` changes) go through `sanitizeHtml`: `script, style, iframe, object, embed, link, meta, base, form, foreignObject` are removed, SVG animations (`animate`, `set`, `animateTransform`, `animateMotion`) are removed only when they target a URL or `on*` attribute or carry an unsafe URL (harmless ones such as spinners stay), `on*` attributes are dropped, and `javascript:`, `vbscript:` and `data:text/html` URLs are dropped. URL checks ignore tabs, newlines and other control characters, because browsers do too (`java<TAB>script:` is still `javascript:`).
 - Attributes are set only through `setSafeAttribute`: the name must be a valid attribute name, and `on*`, `srcdoc` and `data-revamp-*` are refused.
 - Inline styles are set only through `applyStyles`: every declaration is tried on a scratch element first, so a value the browser would silently ignore (`24` without a unit, `red; }`) fails with a clear message and nothing is half-applied. A trailing `!important` is accepted; an empty value removes the property.
 - Edit messages (`EDIT_TEXT`, `EDIT_ATTRIBUTE`, `APPLY_CSS`) answer with the real result (`success: false` plus the reason); the panel shows that reason and keeps the form as typed.

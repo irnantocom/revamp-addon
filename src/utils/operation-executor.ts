@@ -9,7 +9,9 @@ export interface AppliedOperation {
   created?: Element[];
 }
 
-const FORBIDDEN_HTML_TAGS = 'script,style,iframe,object,embed,link,meta,base,form';
+const FORBIDDEN_HTML_TAGS = 'script,style,iframe,object,embed,link,meta,base,form,foreignObject';
+// SMIL animation elements; names are camelCase, which selectors match exactly for SVG elements
+const SVG_ANIMATION_TAGS = 'animate,set,animateTransform,animateMotion';
 const URL_ATTRS = new Set(['href', 'src', 'srcset', 'action', 'formaction', 'poster', 'xlink:href']);
 
 const ATTRIBUTE_NAME = /^[A-Za-z_:][-A-Za-z0-9_:.]*$/;
@@ -22,6 +24,20 @@ function isSafeUrl(value: string): boolean {
 }
 
 /**
+ * An SVG animation can write a value into an attribute after the static checks have run, e.g.
+ * <animate attributeName="href" values="javascript:..."> on a link. Harmless animations (spinners,
+ * logos) are kept; only those aimed at URL or event-handler attributes, or carrying an unsafe URL, go.
+ */
+function isDangerousAnimation(el: Element): boolean {
+  const target = (el.getAttribute('attributeName') ?? '').trim().toLowerCase();
+  if (target && (/^on/.test(target) || target === 'srcdoc' || URL_ATTRS.has(target))) return true;
+
+  return ['values', 'to', 'from', 'by'].some((name) =>
+    (el.getAttribute(name) ?? '').split(';').some((value) => !isSafeUrl(value))
+  );
+}
+
+/**
  * Parse HTML from the AI into a fragment with active content stripped
  */
 export function sanitizeHtml(html: string): DocumentFragment {
@@ -30,6 +46,9 @@ export function sanitizeHtml(html: string): DocumentFragment {
   const fragment = template.content;
 
   fragment.querySelectorAll(FORBIDDEN_HTML_TAGS).forEach((el) => el.remove());
+  fragment.querySelectorAll(SVG_ANIMATION_TAGS).forEach((el) => {
+    if (isDangerousAnimation(el)) el.remove();
+  });
   fragment.querySelectorAll('*').forEach((el) => {
     for (const attr of Array.from(el.attributes)) {
       if (/^on/i.test(attr.name) || (URL_ATTRS.has(attr.name.toLowerCase()) && !isSafeUrl(attr.value))) {
