@@ -108,22 +108,19 @@ class RevampInspector {
           break;
 
         case 'EDIT_TEXT':
-          this.editText(message.payload.selector, message.payload.value);
-          sendResponse({ success: true });
+          sendResponse(this.editText(message.payload.selector, message.payload.value));
           break;
 
         case 'EDIT_ATTRIBUTE':
-          this.editAttribute(
+          sendResponse(this.editAttribute(
             message.payload.selector,
             message.payload.attribute,
             message.payload.value
-          );
-          sendResponse({ success: true });
+          ));
           break;
 
         case 'APPLY_CSS':
-          this.applyCSS(message.payload.selector, message.payload.styles);
-          sendResponse({ success: true });
+          sendResponse(this.applyCSS(message.payload.selector, message.payload.styles));
           break;
 
         case 'APPLY_AI_CHANGE':
@@ -754,21 +751,22 @@ class RevampInspector {
   private applyToSelector(
     selectorInfo: SelectorInfo,
     build: (id: number) => Operation
-  ): void {
+  ): MessageResponse {
     const element = SelectorGenerator.resolve(selectorInfo.selector, selectorInfo.type);
     if (!element) {
       console.error('[Revamp] Element not found:', selectorInfo.selector);
-      return;
+      return { success: false, error: 'The element was not found on the page. Select it again.' };
     }
     const [result] = changeManager.applyOperations([build(pageIndex.idOf(element))], pageIndex);
     if (!result.success) console.error('[Revamp] Edit failed:', result.error);
+    return result.success ? { success: true } : { success: false, error: result.error };
   }
 
   /**
    * Edit text content of an element
    */
-  editText(selectorInfo: SelectorInfo, newValue: string): void {
-    this.applyToSelector(selectorInfo, (target) => ({
+  editText(selectorInfo: SelectorInfo, newValue: string): MessageResponse {
+    return this.applyToSelector(selectorInfo, (target) => ({
       id: `edit-text-${Date.now()}`, op: 'set_text', target, text: newValue, explanation: 'Edit text',
     }));
   }
@@ -776,8 +774,8 @@ class RevampInspector {
   /**
    * Edit attribute of an element
    */
-  editAttribute(selectorInfo: SelectorInfo, attribute: string, value: string): void {
-    this.applyToSelector(selectorInfo, (target) => ({
+  editAttribute(selectorInfo: SelectorInfo, attribute: string, value: string): MessageResponse {
+    return this.applyToSelector(selectorInfo, (target) => ({
       id: `edit-attr-${Date.now()}`, op: 'set_attr', target, name: attribute, value, explanation: `Set ${attribute}`,
     }));
   }
@@ -785,8 +783,8 @@ class RevampInspector {
   /**
    * Apply CSS styles to an element
    */
-  applyCSS(selectorInfo: SelectorInfo, styles: Record<string, string>): void {
-    this.applyToSelector(selectorInfo, (target) => ({
+  applyCSS(selectorInfo: SelectorInfo, styles: Record<string, string>): MessageResponse {
+    return this.applyToSelector(selectorInfo, (target) => ({
       id: `edit-style-${Date.now()}`, op: 'set_style', target, styles, explanation: 'Edit style',
     }));
   }

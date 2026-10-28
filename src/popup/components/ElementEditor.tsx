@@ -1,46 +1,91 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { InspectedElement } from '../../types/inspector';
 
 interface Props {
   element: InspectedElement | null;
   onClear: () => void;
+  /** Called with fresh element info after an edit, so the attribute list matches the page */
+  onElementUpdate: (element: InspectedElement) => void;
 }
 
-const ElementEditor: React.FC<Props> = ({ element, onClear }) => {
+const EMPTY_STYLE = {
+  color: '',
+  backgroundColor: '',
+  backgroundImage: '',
+  fontSize: '',
+  padding: '',
+  margin: '',
+};
+
+/** Tag names of the elements inside `innerHTML`, in document order (top level and nested) */
+function childTags(innerHTML: string): string[] {
+  const template = document.createElement('template');
+  template.innerHTML = innerHTML;
+  return Array.from(template.content.querySelectorAll('*')).map((el) => el.tagName.toLowerCase());
+}
+
+const ElementEditor: React.FC<Props> = ({ element, onClear, onElementUpdate }) => {
   const [textValue, setTextValue] = useState('');
   const [selectedAttribute, setSelectedAttribute] = useState('');
   const [customAttributeName, setCustomAttributeName] = useState('');
   const [attributeValue, setAttributeValue] = useState('');
-  const [style, setStyle] = useState({
-    color: '',
-    backgroundColor: '',
-    backgroundImage: '',
-    fontSize: '',
-    padding: '',
-    margin: '',
-  });
+  const [style, setStyle] = useState(EMPTY_STYLE);
+  // Set while we hand refreshed info of the same element back to the parent: the forms must keep what the user typed
+  const refreshing = useRef(false);
 
   useEffect(() => {
+    if (refreshing.current) {
+      refreshing.current = false;
+      return;
+    }
     if (element) {
       setTextValue(element.textContent);
+      setStyle(EMPTY_STYLE);
     }
   }, [element]);
 
+  /** The element info from selection time is a snapshot; re-read it so edits (e.g. the style attribute) show up */
+  const refreshElement = async (tabId: number) => {
+    const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_SELECTED_ELEMENT' });
+    if (response?.success && response.data) {
+      refreshing.current = true;
+      onElementUpdate(response.data);
+    }
+  };
+
   const handleTextEdit = async () => {
     if (!element) return;
+
+    // Setting text replaces everything inside the element, so links, images and bold text would be lost
+    const inside = childTags(element.innerHTML);
+    if (inside.length > 0) {
+      const unique = Array.from(new Set(inside));
+      const shown = unique.slice(0, 5).map((tag) => `<${tag}>`).join(', ') + (unique.length > 5 ? ', ...' : '');
+      const proceed = confirm(
+        `This element contains ${inside.length} child element${inside.length === 1 ? '' : 's'} (${shown}).\n\n` +
+          'Update Text replaces all of them with plain text, which can break the layout.\n' +
+          'You can restore them with "Undo Last Edit".\n\nContinue?'
+      );
+      if (!proceed) return;
+    }
 
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab.id) return;
 
-      await chrome.tabs.sendMessage(tab.id, {
+      const response = await chrome.tabs.sendMessage(tab.id, {
         type: 'EDIT_TEXT',
         payload: {
           selector: element.selector,
           value: textValue,
         },
       });
+      if (!response?.success) {
+        alert(response?.error || 'Failed to update text');
+        return;
+      }
 
+      await refreshElement(tab.id);
       alert('Text updated successfully!');
     } catch (error) {
       console.error('[Popup] Failed to edit text:', error);
@@ -52,7 +97,7 @@ const ElementEditor: React.FC<Props> = ({ element, onClear }) => {
     if (!element || !selectedAttribute) return;
 
     // Determine actual attribute name
-    const attrName = selectedAttribute === 'custom' ? customAttributeName : selectedAttribute;
+    const attrName = (selectedAttribute === 'custom' ? customAttributeName : selectedAttribute).trim();
     
     if (!attrName || !attributeValue) {
       alert('Please provide both attribute name and value');
@@ -63,7 +108,7 @@ const ElementEditor: React.FC<Props> = ({ element, onClear }) => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab.id) return;
 
-      await chrome.tabs.sendMessage(tab.id, {
+      const response = await chrome.tabs.sendMessage(tab.id, {
         type: 'EDIT_ATTRIBUTE',
         payload: {
           selector: element.selector,
@@ -71,22 +116,17 @@ const ElementEditor: React.FC<Props> = ({ element, onClear }) => {
           value: attributeValue,
         },
       });
-
-      alert('Attribute updated successfully!');
-      
-      // Update local state to reflect the new attribute
-      if (selectedAttribute === 'custom' && customAttributeName) {
-        // Add the new attribute to the element's attributes
-        element.attributes[customAttributeName] = attributeValue;
-        // Reset form
-        setCustomAttributeName('');
-        setSelectedAttribute('');
-        setAttributeValue('');
-      } else {
-        // Just reset the value for existing attributes
-        setAttributeValue('');
-        setSelectedAttribute('');
+      if (!response?.success) {
+        alert(response?.error || 'Failed to update attribute');
+        return;
       }
+
+      await refreshElement(tab.id);
+      alert('Attribute updated successfully!');
+
+      setCustomAttributeName('');
+      setSelectedAttribute('');
+      setAttributeValue('');
     } catch (error) {
       console.error('[Popup] Failed to edit attribute:', error);
       alert('Failed to update attribute');
@@ -118,12 +158,16 @@ const ElementEditor: React.FC<Props> = ({ element, onClear }) => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab.id) return;
 
-      await chrome.tabs.sendMessage(tab.id, {
+      const response = await chrome.tabs.sendMessage(tab.id, {
         type: 'APPLY_CSS',
         payload: { selector: element.selector, styles },
       });
+      if (!response?.success) {
+        alert(response?.error || 'Failed to apply style');
+        return;
+      }
 
-      setStyle({ color: '', backgroundColor: '', backgroundImage: '', fontSize: '', padding: '', margin: '' });
+      await refreshElement(tab.id);
     } catch (error) {
       console.error('[Popup] Failed to apply style:', error);
       alert('Failed to apply style');
@@ -136,6 +180,7 @@ const ElementEditor: React.FC<Props> = ({ element, onClear }) => {
       if (!tab.id) return;
 
       await chrome.tabs.sendMessage(tab.id, { type: 'UNDO_EDIT' });
+      await refreshElement(tab.id);
     } catch (error) {
       console.error('[Popup] Failed to undo:', error);
     }

@@ -2,7 +2,7 @@ import { AIChange, ChangeResult } from '../types/ai-response';
 import { Operation, OperationResult } from '../types/operations';
 import { HistoryItem, PersistedOperation } from '../types/demo';
 import { SelectorGenerator } from './selector-generator';
-import { applyOperation } from './operation-executor';
+import { applyOperation, applyStyles, sanitizeHtml, setSafeAttribute } from './operation-executor';
 import { PageIndex } from './page-index';
 import { captureLocator } from './locator';
 
@@ -282,29 +282,13 @@ export class ChangeManager {
         if (typeof change.value !== 'object' || change.value === null) {
           throw new Error('css change requires an object value');
         }
-        const previous = new Map<string, { value: string; priority: string }>();
-        Object.entries(change.value).forEach(([prop, val]) => {
-          const cssProp = prop.startsWith('--') ? prop : prop.replace(/([A-Z])/g, '-$1').toLowerCase();
-          if (!previous.has(cssProp)) {
-            previous.set(cssProp, {
-              value: el.style.getPropertyValue(cssProp),
-              priority: el.style.getPropertyPriority(cssProp),
-            });
-          }
-          el.style.setProperty(cssProp, String(val));
-        });
-        return () => {
-          previous.forEach((old, prop) => {
-            if (old.value) el.style.setProperty(prop, old.value, old.priority);
-            else el.style.removeProperty(prop);
-          });
-        };
+        return applyStyles(el, change.value);
       }
 
       case 'html':
       case 'text': {
         const previousNodes = Array.from(el.childNodes);
-        if (change.action === 'html') el.innerHTML = change.value;
+        if (change.action === 'html') el.replaceChildren(sanitizeHtml(String(change.value)));
         else el.textContent = change.value;
         return () => el.replaceChildren(...previousNodes);
       }
@@ -312,13 +296,7 @@ export class ChangeManager {
       case 'attribute': {
         const name = change.attribute;
         if (!name) throw new Error('attribute change requires an attribute name');
-        if (/^on/i.test(name)) throw new Error(`Refusing to set event handler attribute: ${name}`);
-        const previous = el.getAttribute(name);
-        el.setAttribute(name, change.value);
-        return () => {
-          if (previous === null) el.removeAttribute(name);
-          else el.setAttribute(name, previous);
-        };
+        return setSafeAttribute(el, name, String(change.value));
       }
 
       case 'remove': {
@@ -331,9 +309,8 @@ export class ChangeManager {
       }
 
       case 'insert': {
-        const template = document.createElement('template');
-        template.innerHTML = String(change.value).trim();
-        const inserted = Array.from(template.content.childNodes);
+        const fragment = sanitizeHtml(String(change.value).trim());
+        const inserted = Array.from(fragment.childNodes);
         if (inserted.length === 0) throw new Error('insert change has no content');
 
         const parent = el.parentNode;
@@ -342,22 +319,22 @@ export class ChangeManager {
 
         switch (change.position) {
           case 'before':
-            parent?.insertBefore(template.content, el);
+            parent?.insertBefore(fragment, el);
             break;
           case 'after':
-            parent?.insertBefore(template.content, next);
+            parent?.insertBefore(fragment, next);
             break;
           case 'replace':
-            parent?.insertBefore(template.content, el);
+            parent?.insertBefore(fragment, el);
             el.remove();
             replaced = true;
             break;
           case 'prepend':
-            el.insertBefore(template.content, el.firstChild);
+            el.insertBefore(fragment, el.firstChild);
             break;
           case 'append':
           default:
-            el.appendChild(template.content);
+            el.appendChild(fragment);
             break;
         }
 

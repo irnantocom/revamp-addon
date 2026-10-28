@@ -12,8 +12,13 @@ export interface AppliedOperation {
 const FORBIDDEN_HTML_TAGS = 'script,style,iframe,object,embed,link,meta,base,form';
 const URL_ATTRS = new Set(['href', 'src', 'srcset', 'action', 'formaction', 'poster', 'xlink:href']);
 
+const ATTRIBUTE_NAME = /^[A-Za-z_:][-A-Za-z0-9_:.]*$/;
+const IMPORTANT = /\s*!\s*important\s*$/i;
+
+/** Browsers drop tabs, newlines and other control characters inside a URL, so "java\tscript:" still runs as javascript: */
 function isSafeUrl(value: string): boolean {
-  return !/^\s*(javascript|vbscript|data:text\/html)/i.test(value);
+  const normalized = value.replace(/[\u0000-\u0020\u007f-\u009f]/g, '');
+  return !/^(javascript|vbscript|data:text\/html)/i.test(normalized);
 }
 
 /**
@@ -67,50 +72,33 @@ function applyOperationInner(op: Operation, index: PageIndex, created: Element[]
     }
 
     case 'set_attr':
-      return setAttribute(el, op.name, op.value);
+      return setSafeAttribute(el, op.name, op.value);
 
     case 'set_link':
-      return setAttribute(el, 'href', op.href);
+      return setSafeAttribute(el, 'href', op.href);
 
     case 'replace_image': {
       if (!(el instanceof HTMLImageElement)) {
         throw new Error(`Element [${op.target}] is <${el.tagName.toLowerCase()}>, not an image.`);
       }
       const reverts = [
-        setAttribute(el, 'src', op.src),
+        setSafeAttribute(el, 'src', op.src),
         // srcset/sizes would override the new src
-        setAttribute(el, 'srcset', null),
+        setSafeAttribute(el, 'srcset', null),
       ];
-      if (op.alt !== undefined) reverts.push(setAttribute(el, 'alt', op.alt));
+      if (op.alt !== undefined) reverts.push(setSafeAttribute(el, 'alt', op.alt));
       // <picture><source> would also take priority over img src
       const picture = el.parentElement?.tagName === 'PICTURE' ? el.parentElement : null;
       if (picture) {
         picture.querySelectorAll('source').forEach((source) => {
-          reverts.push(setAttribute(source as HTMLElement, 'srcset', null));
+          reverts.push(setSafeAttribute(source as HTMLElement, 'srcset', null));
         });
       }
       return () => reverts.reverse().forEach((revert) => revert());
     }
 
-    case 'set_style': {
-      const previous = new Map<string, { value: string; priority: string }>();
-      Object.entries(op.styles).forEach(([prop, val]) => {
-        const cssProp = prop.startsWith('--') ? prop : prop.replace(/([A-Z])/g, '-$1').toLowerCase();
-        if (!previous.has(cssProp)) {
-          previous.set(cssProp, {
-            value: el.style.getPropertyValue(cssProp),
-            priority: el.style.getPropertyPriority(cssProp),
-          });
-        }
-        el.style.setProperty(cssProp, String(val));
-      });
-      return () => {
-        previous.forEach((old, prop) => {
-          if (old.value) el.style.setProperty(prop, old.value, old.priority);
-          else el.style.removeProperty(prop);
-        });
-      };
-    }
+    case 'set_style':
+      return applyStyles(el, op.styles);
 
     case 'set_visibility': {
       const prevValue = el.style.getPropertyValue('display');
@@ -201,8 +189,13 @@ function applyOperationInner(op: Operation, index: PageIndex, created: Element[]
   }
 }
 
-function setAttribute(el: Element, name: string, value: string | null): Revert {
+export function setSafeAttribute(el: Element, name: string, value: string | null): Revert {
+  if (!ATTRIBUTE_NAME.test(name)) {
+    throw new Error(`"${name}" is not a valid attribute name. Start with a letter and use only letters, digits, "-", "_", ":" or ".".`);
+  }
   if (/^on/i.test(name)) throw new Error(`Refusing to set event handler attribute: ${name}`);
+  if (name.toLowerCase() === 'srcdoc') throw new Error('Refusing to set srcdoc: it embeds a whole HTML document.');
+  if (/^data-revamp-/i.test(name)) throw new Error(`${name} is used by Revamp internally and cannot be edited.`);
   if (value !== null && URL_ATTRS.has(name.toLowerCase()) && !isSafeUrl(value)) {
     throw new Error(`Refusing unsafe URL for ${name}`);
   }
@@ -212,6 +205,50 @@ function setAttribute(el: Element, name: string, value: string | null): Revert {
   return () => {
     if (previous === null) el.removeAttribute(name);
     else el.setAttribute(name, previous);
+  };
+}
+
+/**
+ * Set inline styles and return how to undo them. Browsers silently ignore a declaration they cannot
+ * parse, so every one is tried on a scratch element first: a bad value then fails with a clear message
+ * and nothing is half-applied. An empty value removes the property.
+ */
+export function applyStyles(el: HTMLElement, styles: Record<string, unknown>): Revert {
+  const declarations = Object.entries(styles).map(([prop, raw]) => {
+    const property = prop.startsWith('--') ? prop : prop.replace(/([A-Z])/g, '-$1').toLowerCase();
+    let value = String(raw).trim();
+    const important = IMPORTANT.test(value);
+    if (important) value = value.replace(IMPORTANT, '');
+    return { property, value, priority: important ? 'important' : '' };
+  });
+
+  const probe = document.createElement('span');
+  const invalid = declarations.filter(({ property, value, priority }) => {
+    if (value === '') return false;
+    probe.style.setProperty(property, value, priority);
+    const accepted = probe.style.getPropertyValue(property) !== '';
+    probe.style.removeProperty(property);
+    return !accepted;
+  });
+  if (invalid.length > 0) {
+    throw new Error(`Invalid CSS: ${invalid.map(({ property, value }) => `${property}: ${value}`).join('; ')}`);
+  }
+
+  const previous = new Map<string, { value: string; priority: string }>();
+  declarations.forEach(({ property, value, priority }) => {
+    if (!previous.has(property)) {
+      previous.set(property, {
+        value: el.style.getPropertyValue(property),
+        priority: el.style.getPropertyPriority(property),
+      });
+    }
+    el.style.setProperty(property, value, priority);
+  });
+  return () => {
+    previous.forEach((old, property) => {
+      if (old.value) el.style.setProperty(property, old.value, old.priority);
+      else el.style.removeProperty(property);
+    });
   };
 }
 

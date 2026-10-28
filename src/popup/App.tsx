@@ -112,6 +112,7 @@ const App: React.FC = () => {
           <ElementEditor
             element={selectedElement}
             onClear={() => setSelectedElement(null)}
+            onElementUpdate={setSelectedElement}
           />
         )}
         {activeTab === 'ai' && (

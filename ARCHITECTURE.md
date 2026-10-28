@@ -57,7 +57,7 @@ The panel talks to the page through `sendToTab` ([src/popup/tab-messaging.ts](sr
 | [src/utils/screenshot.ts](src/utils/screenshot.ts) | Viewport and stitched full-page screenshots. |
 | [src/export/](src/export) | Static-site export pipeline (see section 6). |
 | [src/types/](src/types) | Shared types: operations, demo, inspector, snapshots. |
-| [tests/](tests) | Vitest suites for selectors, operations, demo, annotations, versions, handoff, export, Azure provider. |
+| [tests/](tests) | Vitest suites for selectors, operations, demo, annotations, versions, handoff, export, Azure provider, element editor, input validation. |
 
 ## 3. AI edit pipeline
 
@@ -84,7 +84,10 @@ APPLY_OPERATIONS ───────────────────► ap
 
 **Safety rules**
 - Operations not in the catalog are rejected by the parser.
-- `set_html` goes through `sanitizeHtml`: `script, style, iframe, object, embed, link, meta, base, form` are removed, and `javascript:`, `vbscript:` and `data:text/html` URLs are dropped.
+- `set_html` (and the legacy `html` / `insert` changes) go through `sanitizeHtml`: `script, style, iframe, object, embed, link, meta, base, form` are removed, `on*` attributes are dropped, and `javascript:`, `vbscript:` and `data:text/html` URLs are dropped. URL checks ignore tabs, newlines and other control characters, because browsers do too (`java<TAB>script:` is still `javascript:`).
+- Attributes are set only through `setSafeAttribute`: the name must be a valid attribute name, and `on*`, `srcdoc` and `data-revamp-*` are refused.
+- Inline styles are set only through `applyStyles`: every declaration is tried on a scratch element first, so a value the browser would silently ignore (`24` without a unit, `red; }`) fails with a clear message and nothing is half-applied. A trailing `!important` is accepted; an empty value removes the property.
+- Edit messages (`EDIT_TEXT`, `EDIT_ATTRIBUTE`, `APPLY_CSS`) answer with the real result (`success: false` plus the reason); the panel shows that reason and keeps the form as typed.
 - Each applied operation stores an inverse, so revert does not depend on re-finding the element by selector.
 - All provider calls happen in the service worker; the panel and content script never see the network request to an AI API.
 

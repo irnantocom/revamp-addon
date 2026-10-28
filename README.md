@@ -52,7 +52,7 @@ If the page was open before you installed or reloaded the extension, the icon cl
 | `npm run build` | Type-check, build content script and service worker, build popup. Does **not** copy `manifest.json` or icons; use `./build.sh` for a loadable `dist/`. |
 | `npm run dev` | Watch build of the popup bundle (reload the extension and the tab after changes). |
 | `npm run type-check` | `tsc --noEmit`. |
-| `npm test` | Vitest with jsdom (93 tests). |
+| `npm test` | Vitest with jsdom (140 tests). |
 
 ## Documentation
 
