@@ -56,6 +56,8 @@ Priority: **P0** required for the product to work, **P1** expected, **P2** later
 | F8 | Provider-agnostic adapter; work with OpenAI, Azure OpenAI, Claude, Gemini | P0 | Done |
 | F9 | Full text of elements is sent so rewrite and translation cover everything; refuse to rewrite text the AI cannot see in full | P1 | Done |
 | F10 | Perplexity, Mistral, Cohere, Groq, OpenRouter adapters | P2 | Not started (keys can be entered, requests fail with "not yet implemented") |
+| F23 | Attach images, PDFs and text documents (TXT, MD, CSV, JSON, HTML, DOCX) to the AI chat as context that stays with the conversation; paperclip, drag and drop, paste | P1 | Done |
+| F24 | Attach videos (MP4, WebM), sent to the AI as sampled still frames | P1 | Done |
 
 ### Demo management
 | ID | Requirement | Pri | Status |
@@ -84,7 +86,7 @@ Priority: **P0** required for the product to work, **P1** expected, **P2** later
 | Platform | Chrome, Manifest V3, service worker (no persistent background page) |
 | Stack | TypeScript (strict), React, Tailwind, Vite, JSZip; no other stacks unless decided |
 | Security | No `eval`, no inline scripts; AI output is never executed as code; HTML from the AI is sanitized; AI requests only from the service worker |
-| Privacy | Page content leaves the browser only to the AI provider the user configured. API keys stay in `chrome.storage.local` |
+| Privacy | Page content and attached files leave the browser only to the AI provider the user configured; the chat says so next to the attachments. API keys stay in `chrome.storage.local`; file content stays in IndexedDB |
 | Non-destructive | The live site is never changed; every change has an inverse |
 | Resilience | Selection by locator (selector + tag + text + ordinal) survives reloads; invalid saved or imported operations are skipped, not fatal |
 | Performance | Index capped (400 elements, bounded text budget); export limited to 800 assets, 15 MB per file, 250 MB total |

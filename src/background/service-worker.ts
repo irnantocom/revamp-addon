@@ -8,6 +8,7 @@ import { ClaudeProvider } from '../ai/claude-provider';
 import { GeminiProvider } from '../ai/gemini-provider';
 import { AzureOpenAIProvider } from '../ai/azure-openai-provider';
 import type { AIRequest } from '../ai/provider-interface';
+import { assertPayloadSize } from './payload-guard';
 
 interface Message {
   type: string;
@@ -147,6 +148,12 @@ async function handleAIRequest(
   sendResponse: (response: MessageResponse) => void
 ) {
   try {
+    const tooLarge = assertPayloadSize(payload.messages);
+    if (tooLarge) {
+      sendResponse({ success: false, error: tooLarge });
+      return;
+    }
+
     // Get API keys from storage
     const result = await chrome.storage.local.get('settings');
     const apiKeys = result.settings?.apiKeys || {};

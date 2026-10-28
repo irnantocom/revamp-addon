@@ -201,32 +201,25 @@ const ElementEditor: React.FC<Props> = ({ element, onClear, onElementUpdate }) =
   return (
     <div className="p-4 space-y-4">
       {/* Element Info */}
-      <div className="bg-white rounded-lg border border-gray-200 p-4">
-        <div className="flex justify-between items-start mb-3">
-          <h2 className="text-lg font-semibold text-gray-900">Selected Element</h2>
+      <div className="bg-green-50 border border-green-200 rounded p-2 text-xs">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-green-800">Selected:</span>
+            <code className="bg-green-100 px-1 py-0.5 rounded text-green-900">
+              {element.tagName}
+            </code>
+            <span className="text-green-600">{element.selector.type}</span>
+          </div>
           <button
             onClick={onClear}
-            className="text-xs text-gray-500 hover:text-gray-700"
+            className="text-xs text-green-700 hover:text-red-600 hover:underline transition-colors"
+            title="Clear selected element"
           >
             Clear
           </button>
         </div>
-
-        <div className="space-y-2 text-xs">
-          <div>
-            <span className="font-medium text-gray-700">Tag:</span>
-            <code className="ml-2 bg-gray-100 px-2 py-1 rounded">{element.tagName}</code>
-          </div>
-          <div>
-            <span className="font-medium text-gray-700">Selector:</span>
-            <code className="ml-2 bg-gray-100 px-2 py-1 rounded text-xs break-all">
-              {element.selector.selector}
-            </code>
-          </div>
-          <div>
-            <span className="font-medium text-gray-700">Type:</span>
-            <span className="ml-2 text-gray-600">{element.selector.type}</span>
-          </div>
+        <div className="mt-1 text-green-700 truncate" title={element.selector.selector}>
+          {element.selector.selector}
         </div>
       </div>
 

@@ -4,6 +4,7 @@
  */
 
 import { IAIProvider, AIMessage, AIResponse, AIProviderConfig } from './provider-interface';
+import { toGeminiRequest } from './message-format';
 
 export class GeminiProvider implements IAIProvider {
   name = 'Gemini';
@@ -22,14 +23,7 @@ export class GeminiProvider implements IAIProvider {
   ): Promise<AIResponse> {
     try {
       // Convert messages to Gemini format
-      const contents = messages
-        .filter(m => m.role !== 'system')
-        .map(m => ({
-          role: m.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: m.content }],
-        }));
-
-      const systemInstruction = messages.find(m => m.role === 'system');
+      const { contents, systemInstruction } = toGeminiRequest(messages);
 
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.config.apiKey}`,
@@ -40,9 +34,7 @@ export class GeminiProvider implements IAIProvider {
           },
           body: JSON.stringify({
             contents,
-            ...(systemInstruction && {
-              systemInstruction: { parts: [{ text: systemInstruction.content }] },
-            }),
+            ...(systemInstruction && { systemInstruction }),
             generationConfig: {
               temperature: options?.temperature ?? 0.7,
               maxOutputTokens: options?.maxTokens ?? 8192,

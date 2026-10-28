@@ -50,7 +50,10 @@ The panel talks to the page through `sendToTab` ([src/popup/tab-messaging.ts](sr
 | [src/utils/annotation-layer.ts](src/utils/annotation-layer.ts) | Numbered note pins drawn over the page. |
 | [src/utils/selector-generator.ts](src/utils/selector-generator.ts) | Stable selectors (data-* > id > CSS path > XPath). |
 | [src/utils/highlight-overlay.ts](src/utils/highlight-overlay.ts) | Hover/pick/preview overlays that never touch the page's own styles. |
-| [src/utils/prompt-builder.ts](src/utils/prompt-builder.ts) | System prompt with the page index and the operation catalog. |
+| [src/utils/prompt-builder.ts](src/utils/prompt-builder.ts) | System prompt with the page index and the operation catalog; adds the attached-files rules when files are attached. |
+| [src/utils/attachment-reader.ts](src/utils/attachment-reader.ts), [file-sniff.ts](src/utils/file-sniff.ts), [document-text.ts](src/utils/document-text.ts), [media-processing.ts](src/utils/media-processing.ts) | Chat attachments: validate by magic bytes, extract document text, downscale images, sample video frames. |
+| [src/utils/attachment-store.ts](src/utils/attachment-store.ts), [chat-content.ts](src/utils/chat-content.ts) | IndexedDB store for file content; builds the request messages from chat history and the draft (capabilities, size budget, notes). |
+| [src/ai/capabilities.ts](src/ai/capabilities.ts), [message-format.ts](src/ai/message-format.ts) | What each provider accepts; neutral `ContentPart`s to OpenAI, Claude and Gemini wire formats. |
 | [src/utils/ai-response-parser.ts](src/utils/ai-response-parser.ts), [legacy-changes.ts](src/utils/legacy-changes.ts) | Older selector-based response format, converted into operations. |
 | [src/utils/share-code.ts](src/utils/share-code.ts) | Demo to `revamp1:` text code (deflate + base64url). |
 | [src/utils/handoff-report.ts](src/utils/handoff-report.ts) | Markdown and HTML change report. |
@@ -91,6 +94,27 @@ APPLY_OPERATIONS ───────────────────► ap
 - Each applied operation stores an inverse, so revert does not depend on re-finding the element by selector.
 - All provider calls happen in the service worker; the panel and content script never see the network request to an AI API.
 
+### Chat attachments
+
+The AI Chat tab accepts images, PDFs, videos and text documents as context (paperclip, drag and drop, or paste).
+
+```
+file → readAttachment (panel)        → StoredAttachment { meta, parts[], bytes }
+        ├─ type from magic bytes (extension and file.type are ignored; SVG refused)
+        ├─ image: downscaled to 1568 px; PDF: base64; video: 6 JPEG frames (+ a text part with their times)
+        └─ DOCX/TXT/MD/CSV/JSON/HTML: text, capped at 60,000 chars, wrapped in <attached_file name="...">
+meta → chatHistory (chrome.storage); parts → IndexedDB "revamp-attachments"
+send → buildRequestMessages(history, draft) → AI_REQUEST → provider adapter maps ContentPart to its wire format
+```
+
+- `AIMessage.content` is `string | ContentPart[]`; a string passes through every adapter unchanged.
+- **Capabilities** (`src/ai/capabilities.ts`): OpenAI, Claude, Gemini take images and PDFs; Azure takes images only (PDF not verified for Azure deployments); providers without an adapter take nothing. A file the chosen provider cannot take, a file missing from the store, or one over the 15 MB per-request budget is replaced by a one-line note in the request (also shown under the reply), never an API error. The budget goes to the draft first, then newest to oldest.
+- **Limits**: 5 files per message; image 10 MB, PDF 11 MB (base64 adds a third, so more could never fit the 15 MB budget), document 5 MB, video 100 MB (source sizes). The service worker refuses requests over 20 MB.
+- **Images** are sent as they are only when small (3.5 MB or less) and within 1568 px; otherwise they are re-encoded as JPEG. GIFs always become a PNG of their first frame (Gemini takes no GIF, OpenAI no animated one). Claude's 5 MB image limit is the reason for the size rule.
+- **A failed request** returns the typed text and the files to the draft and removes the failed turn from the history, so a refused file cannot poison later requests. Whitespace-only text counts as no text (Claude rejects blank text blocks). Pasting leaves text alone when the clipboard holds text, since Office copies carry a picture of the text as well.
+- **Safety**: file text sits in a delimited block, the closing tag is defused inside it, and the system prompt says attachments are reference material, never instructions, and cannot be used as an image URL.
+- File content is never written to `chrome.storage`; `chatHistory` holds names, sizes and a thumbnail of at most 12,000 characters. "Clear chat" empties the IndexedDB store.
+
 ### Page index
 
 `PageIndex` assigns each meaningful element (landmarks, text tags, media) a numeric id held in a `WeakMap`, so ids are stable within a page session and nothing is written to the DOM. It renders `[id] tag "text"` lines, indented by nesting, capped at 400 entries. Editable text is shown in full (up to 800 characters, 40 000 per index) so the AI can rewrite or translate all of it; longer text is marked `…[TRUNCATED: N chars total]` and the prompt forbids rewriting it. Elements hidden by Revamp stay listed as `(HIDDEN)`.
@@ -117,6 +141,8 @@ Ids die on reload, so saved changes use a `Locator` ([src/utils/locator.ts](src/
 | `demo:<origin><pathname>` | `DemoConfig` for that page |
 | `demoVersions:<origin><pathname>` | `DemoVersion[]` |
 | `localStorage["revamp-panel-position"]` (host page) | floating panel x/y |
+| `chatHistory` | AI chat messages; attachments as metadata only |
+| IndexedDB `revamp-attachments` | file content (`StoredAttachment`) for chat attachments |
 
 ## 5. Message reference
 

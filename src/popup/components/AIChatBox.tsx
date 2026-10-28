@@ -6,6 +6,12 @@ import { parseOperationsResponse } from '../../utils/operation-parser';
 import { buildSystemPrompt, PageIndexData } from '../../utils/prompt-builder';
 import { InspectedElement } from '../../types/inspector';
 import ChangePreview, { ChangeItem, PreviewStatus } from './ChangePreview';
+import AttachmentChips from './AttachmentChips';
+import { pastedImageFiles, useAttachments } from '../use-attachments';
+import { attachmentStore } from '../attachment-store-instance';
+import { acceptedFileTypes, getCapabilities, providerLabel } from '../../ai/capabilities';
+import { buildRequestMessages } from '../../utils/chat-content';
+import { AttachmentMeta } from '../../types/attachments';
 
 // Helper to ensure content script is ready
 const ensureContentScript = async (tabId: number): Promise<boolean> => {
@@ -33,6 +39,10 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  // Files attached to a user message: metadata only, the content lives in IndexedDB
+  attachments?: AttachmentMeta[];
+  // Files that were not sent as attached (unsupported by the provider, gone, too large)
+  notes?: string[];
   // Legacy single action format (backward compatibility)
   action?: {
     action: 'text' | 'css' | 'html' | 'attribute' | 'script';
@@ -77,6 +87,10 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [draggingFiles, setDraggingFiles] = useState(false);
+  const caps = getCapabilities(provider);
+  const attachments = useAttachments(caps, attachmentStore);
 
   // Provider labels for display
   const providerLabels: Record<string, string> = {
@@ -268,17 +282,23 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
   }, [messages]);
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+    const draftAttachments = attachments.ready;
+    const draftText = input;
+    const text = input.trim();
+    if ((!text && draftAttachments.length === 0) || isLoading || attachments.busy) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: input,
+      content: text,
       timestamp: Date.now(),
+      ...(draftAttachments.length > 0 && { attachments: draftAttachments }),
     };
+    let requestNotes: string[] = [];
 
     setMessages((prev) => [...prev, userMessage]);
     setInput('');
+    attachments.clear();
     setIsLoading(true);
 
     try {
@@ -314,25 +334,23 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
         console.warn('[AI Chat] Could not get page index:', indexError);
       }
 
+      const hasAttachments = draftAttachments.length > 0 || messages.some((m) => m.attachments?.length);
+      const built = await buildRequestMessages({
+        systemPrompt: buildSystemPrompt(pageIndexData, { hasAttachments }),
+        history: messages.map((m) => ({ role: m.role, text: m.content, attachments: m.attachments })),
+        draft: { text, attachments: draftAttachments },
+        load: (id) => attachmentStore.get(id),
+        caps,
+        providerLabel: providerLabel(provider),
+      });
+      requestNotes = built.notes;
+
       const response = await chrome.runtime.sendMessage({
         type: 'AI_REQUEST',
         payload: {
           provider,
           model,
-          messages: [
-            {
-              role: 'system',
-              content: buildSystemPrompt(pageIndexData),
-            },
-            ...messages.map((m) => ({
-              role: m.role,
-              content: m.content,
-            })),
-            {
-              role: 'user',
-              content: input,
-            },
-          ],
+          messages: built.messages,
           options: {
             // Translating or rewriting a whole page needs room: every changed text is returned in full
             maxTokens: provider === 'azure' || /2\.5|2\.0|gpt-4o|gpt-4\.1/.test(model) ? 8192 : 4096,
@@ -405,6 +423,7 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
           role: 'assistant',
           content: aiContent + truncationWarning,
           timestamp: Date.now(),
+          ...(requestNotes.length > 0 && { notes: requestNotes }),
           action: legacyAction,
           revampResponse: revampResponse || undefined,
           operationsResponse: operationsResponse || undefined,
@@ -431,7 +450,10 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
         content: `Error: ${error}. Please check your API key in Settings.`,
         timestamp: Date.now(),
       };
-      setMessages((prev) => [...prev, errorMessage]);
+      // The request did not go through: give the draft back and keep the failed turn (and its files) out of the history
+      setMessages((prev) => [...prev.filter((m) => m.id !== userMessage.id), errorMessage]);
+      setInput(draftText);
+      attachments.restore(draftAttachments);
     } finally {
       setIsLoading(false);
     }
@@ -448,6 +470,8 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
       
       // Clear state first
       setMessages([]);
+      attachments.clear();
+      attachmentStore.clear().catch((error) => console.error('[AI Chat] Failed to clear attachments:', error));
       
       // Then clear from storage to ensure it's synced
       try {
@@ -708,7 +732,24 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
 
 
   return (
-    <div className="flex flex-col h-full">
+    <div
+      className={`flex flex-col h-full ${draggingFiles ? 'ring-2 ring-inset ring-blue-400' : ''}`}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes('Files')) return;
+        e.preventDefault();
+        setDraggingFiles(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDraggingFiles(false);
+      }}
+      onDrop={(e) => {
+        if (!e.dataTransfer.types.includes('Files')) return;
+        e.preventDefault();
+        setDraggingFiles(false);
+        const files = Array.from(e.dataTransfer.files);
+        if (files.length > 0 && !isLoading) void attachments.addFiles(files);
+      }}
+    >
       {/* Header */}
       <div className="bg-white border-b border-gray-200 p-3">
         <div className="flex items-center justify-between mb-2">
@@ -841,7 +882,23 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
                   : 'bg-white border border-gray-200 text-gray-900'
               }`}
             >
-              <p className="whitespace-pre-wrap break-words">{message.content}</p>
+              {message.content && <p className="whitespace-pre-wrap break-words">{message.content}</p>}
+              {message.attachments && message.attachments.length > 0 && (
+                <div className={message.content ? 'mt-2' : ''}>
+                  <AttachmentChips
+                    items={message.attachments.map((a) => ({
+                      key: a.id, name: a.name, kind: a.kind, size: a.size, thumb: a.thumb, status: 'ready' as const,
+                    }))}
+                  />
+                </div>
+              )}
+              {message.notes && message.notes.length > 0 && (
+                <ul className="mt-2 text-[10px] text-gray-500 list-disc pl-4">
+                  {message.notes.map((note, i) => (
+                    <li key={i}>{note}</li>
+                  ))}
+                </ul>
+              )}
               
               {/* Structured response: operations on indexed elements, or selector-based changes */}
               {message.role === 'assistant' && changeItems(message).length > 0 && (
@@ -905,10 +962,45 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
 
       {/* Input */}
       <div className="border-t border-gray-200 p-3 bg-white">
+        {attachments.chips.length > 0 && (
+          <div className="mb-2 space-y-1">
+            <AttachmentChips items={attachments.chips} onRemove={attachments.remove} />
+            <p className="text-[10px] text-gray-500">Files are sent to {providerLabel(provider) || 'the selected AI provider'}.</p>
+          </div>
+        )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          hidden
+          accept={acceptedFileTypes(caps)}
+          onChange={(e) => {
+            const files = Array.from(e.target.files ?? []);
+            e.target.value = '';
+            if (files.length > 0) void attachments.addFiles(files);
+          }}
+        />
         <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isLoading}
+            title="Attach files: images, PDF, video or documents"
+            aria-label="Attach files"
+            className="self-end rounded border border-gray-300 px-2 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            📎
+          </button>
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onPaste={(e) => {
+              const files = pastedImageFiles(Array.from(e.clipboardData.files), e.clipboardData.getData('text/plain'));
+              if (files.length > 0) {
+                e.preventDefault();
+                void attachments.addFiles(files);
+              }
+            }}
             onKeyPress={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -926,7 +1018,7 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
           />
           <button
             onClick={handleSend}
-            disabled={isLoading || !input.trim()}
+            disabled={isLoading || attachments.busy || (!input.trim() && attachments.ready.length === 0)}
             className="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed self-end"
           >
             Send

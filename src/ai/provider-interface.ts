@@ -3,9 +3,12 @@
  * Provider-agnostic abstraction for multiple AI services
  */
 
+import type { ContentPart } from '../types/attachments';
+
 export interface AIMessage {
   role: 'user' | 'assistant' | 'system';
-  content: string;
+  /** Plain text, or text plus attachments (images, PDFs) */
+  content: string | ContentPart[];
 }
 
 export interface AIRequest {

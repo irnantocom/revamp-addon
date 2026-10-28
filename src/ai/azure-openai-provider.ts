@@ -4,6 +4,7 @@
  */
 
 import { IAIProvider, AIMessage, AIResponse, AIProviderConfig } from './provider-interface';
+import { toOpenAIMessages } from './message-format';
 
 export interface AzureOpenAIConfig extends AIProviderConfig {
   endpoint: string;
@@ -38,7 +39,7 @@ export class AzureOpenAIProvider implements IAIProvider {
             'api-key': this.config.apiKey.trim(),
           },
           body: JSON.stringify({
-            messages,
+            messages: toOpenAIMessages(messages),
             temperature: options?.temperature ?? 0.7,
             [tokenParam]: options?.maxTokens ?? 2000,
             stream: false,

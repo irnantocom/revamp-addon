@@ -10,7 +10,7 @@ Changes are temporary and local to your browser. The real website is never modif
 |------|--------------|
 | **Inspector** | Hover to highlight, click to select an element. Works inside a floating, draggable, resizable panel. |
 | **Editor** | Edit text, attributes and CSS of the selected element, with undo. |
-| **AI Chat** | Ask for changes ("make the hero heading shorter, hide the second section"). The AI returns structured operations that you preview, tick or untick, and apply. Page-level or element-level scope. |
+| **AI Chat** | Ask for changes ("make the hero heading shorter, hide the second section"). The AI returns structured operations that you preview, tick or untick, and apply. Page-level or element-level scope. Attach images, PDFs, videos (sent as frames) or documents (TXT, MD, CSV, JSON, HTML, DOCX) as context with the paperclip, drag and drop or paste. |
 | **Demo mode** | Applied changes are saved per page and re-applied after reload. Section list (hide, show, move up/down, duplicate, remove), per-change revert, reset, on/off switch. |
 | **Notes** | Pin notes to elements. "Ask AI to apply open notes" turns them into an AI request. |
 | **Versions and sharing** | Save named versions, compare them, share a demo as a JSON file or a text code (no server). |
@@ -19,6 +19,8 @@ Changes are temporary and local to your browser. The real website is never modif
 | **Static export** | ZIP with `index.html`, one `css/styles.css`, downloaded images and fonts, URLs rewritten to local paths. Tracking scripts, chat widgets and cookie banners are removed. |
 
 AI providers with a working adapter: **OpenAI**, **Azure OpenAI**, **Anthropic Claude**, **Google Gemini**. Settings also lists Perplexity, Mistral, Cohere, Groq and OpenRouter, but those return "not yet implemented".
+
+Attachments: OpenAI, Claude and Gemini accept images and PDFs; Azure OpenAI accepts images only for now. Documents are sent as text to every provider. Attached files are sent to the provider you selected.
 
 ## Quick start
 
@@ -52,7 +54,7 @@ If the page was open before you installed or reloaded the extension, the icon cl
 | `npm run build` | Type-check, build content script and service worker, build popup. Does **not** copy `manifest.json` or icons; use `./build.sh` for a loadable `dist/`. |
 | `npm run dev` | Watch build of the popup bundle (reload the extension and the tab after changes). |
 | `npm run type-check` | `tsc --noEmit`. |
-| `npm test` | Vitest with jsdom (150 tests). |
+| `npm test` | Vitest with jsdom (243 tests). |
 
 ## Documentation
 

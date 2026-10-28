@@ -4,6 +4,7 @@
  */
 
 import { IAIProvider, AIMessage, AIResponse, AIProviderConfig } from './provider-interface';
+import { toOpenAIMessages } from './message-format';
 
 export class OpenAIProvider implements IAIProvider {
   name = 'OpenAI';
@@ -32,7 +33,7 @@ export class OpenAIProvider implements IAIProvider {
         },
         body: JSON.stringify({
           model,
-          messages,
+          messages: toOpenAIMessages(messages),
           temperature: options?.temperature ?? 0.7,
           max_tokens: options?.maxTokens ?? 2000,
           stream: options?.stream ?? false,

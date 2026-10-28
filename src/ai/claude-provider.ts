@@ -4,6 +4,7 @@
  */
 
 import { IAIProvider, AIMessage, AIResponse, AIProviderConfig } from './provider-interface';
+import { toClaudeRequest } from './message-format';
 
 export class ClaudeProvider implements IAIProvider {
   name = 'Claude';
@@ -22,8 +23,7 @@ export class ClaudeProvider implements IAIProvider {
   ): Promise<AIResponse> {
     try {
       // Claude API requires system messages to be separate
-      const systemMessage = messages.find(m => m.role === 'system');
-      const conversationMessages = messages.filter(m => m.role !== 'system');
+      const { system, messages: conversationMessages } = toClaudeRequest(messages);
 
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -35,7 +35,7 @@ export class ClaudeProvider implements IAIProvider {
         body: JSON.stringify({
           model,
           messages: conversationMessages,
-          ...(systemMessage && { system: systemMessage.content }),
+          ...(system !== undefined && { system }),
           temperature: options?.temperature ?? 0.7,
           max_tokens: options?.maxTokens ?? 2000,
           stream: options?.stream ?? false,
