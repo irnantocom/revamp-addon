@@ -4,6 +4,7 @@ import { AIRevampResponse, AIChange } from '../../types/ai-response';
 import { Operation, OperationsResponse } from '../../types/operations';
 import { parseOperationsResponse } from '../../utils/operation-parser';
 import { buildSystemPrompt, PageIndexData } from '../../utils/prompt-builder';
+import { resolveAttachmentSources } from '../../utils/attachment-refs';
 import { InspectedElement } from '../../types/inspector';
 import ChangePreview, { ChangeItem, PreviewStatus } from './ChangePreview';
 import AttachmentChips from './AttachmentChips';
@@ -334,9 +335,12 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
         console.warn('[AI Chat] Could not get page index:', indexError);
       }
 
+      const images = [...messages.flatMap((m) => m.attachments ?? []), ...draftAttachments]
+        .filter((a) => a.kind === 'image')
+        .map(({ id, name }) => ({ id, name }));
       const hasAttachments = draftAttachments.length > 0 || messages.some((m) => m.attachments?.length);
       const built = await buildRequestMessages({
-        systemPrompt: buildSystemPrompt(pageIndexData, { hasAttachments }),
+        systemPrompt: buildSystemPrompt(pageIndexData, { hasAttachments, images }),
         history: messages.map((m) => ({ role: m.role, text: m.content, attachments: m.attachments })),
         draft: { text, attachments: draftAttachments },
         load: (id) => attachmentStore.get(id),
@@ -587,8 +591,16 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
 
     try {
       await withActiveTab(async (tabId) => {
-        const operations = (message.operationsResponse?.operations || []).filter((o) => ids.includes(o.id));
+        // Uploaded images travel as "attachment:<id>"; the page needs the actual data URL
+        const { operations, errors: unresolved } = await resolveAttachmentSources(
+          (message.operationsResponse?.operations || []).filter((o) => ids.includes(o.id)),
+          (id) => attachmentStore.get(id)
+        );
         const legacyChanges = (message.revampResponse?.changes || []).filter((c) => ids.includes(c.id));
+        if (unresolved.length > 0) {
+          alert(unresolved.map((e) => e.error).join('\n'));
+          if (operations.length === 0 && legacyChanges.length === 0) return;
+        }
 
         const response = operations.length > 0
           ? await chrome.tabs.sendMessage(tabId, {

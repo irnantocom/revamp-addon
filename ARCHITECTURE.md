@@ -112,12 +112,34 @@ send → buildRequestMessages(history, draft) → AI_REQUEST → provider adapte
 - **Limits**: 5 files per message; image 10 MB, PDF 11 MB (base64 adds a third, so more could never fit the 15 MB budget), document 5 MB, video 100 MB (source sizes). The service worker refuses requests over 20 MB.
 - **Images** are sent as they are only when small (3.5 MB or less) and within 1568 px; otherwise they are re-encoded as JPEG. GIFs always become a PNG of their first frame (Gemini takes no GIF, OpenAI no animated one). Claude's 5 MB image limit is the reason for the size rule.
 - **A failed request** returns the typed text and the files to the draft and removes the failed turn from the history, so a refused file cannot poison later requests. Whitespace-only text counts as no text (Claude rejects blank text blocks). Pasting leaves text alone when the clipboard holds text, since Office copies carry a picture of the text as well.
-- **Safety**: file text sits in a delimited block, the closing tag is defused inside it, and the system prompt says attachments are reference material, never instructions, and cannot be used as an image URL.
+- **Safety**: file text sits in a delimited block, the closing tag is defused inside it, and the system prompt says attachments are reference material, never instructions, and that only the uploaded images listed at the end of the prompt can be placed on the page.
+- **Uploaded image on the page**: the system prompt lists each image attachment as `attachment:<id>`; the AI returns `replace_image` with that `src`. The panel swaps it for a `data:` URL from the IndexedDB store (`resolveAttachmentSources` in [attachment-refs.ts](src/utils/attachment-refs.ts)) when the change is applied, so the chat history keeps only the reference while the page, the demo and the export get the image. A missing file, a non-image, or an image over 2,000,000 characters as a data URL is refused with a message and the other changes still apply (the demo lives in `chrome.storage.local`, which is capped). A page whose CSP blocks `img-src data:` will not show the image; use an image URL there.
 - File content is never written to `chrome.storage`; `chatHistory` holds names, sizes and a thumbnail of at most 12,000 characters. "Clear chat" empties the IndexedDB store.
 
 ### Page index
 
-`PageIndex` assigns each meaningful element (landmarks, text tags, media) a numeric id held in a `WeakMap`, so ids are stable within a page session and nothing is written to the DOM. It renders `[id] tag "text"` lines, indented by nesting, capped at 400 entries. Editable text is shown in full (up to 800 characters, 40 000 per index) so the AI can rewrite or translate all of it; longer text is marked `…[TRUNCATED: N chars total]` and the prompt forbids rewriting it. Elements hidden by Revamp stay listed as `(HIDDEN)`.
+`PageIndex` assigns each meaningful element (landmarks, text tags, media) a numeric id held in a `WeakMap`, so ids are stable within a page session and nothing is written to the DOM. It renders `[id] tag "text"` lines, indented by nesting, capped at 400 entries. Editable text is shown in full (up to 800 characters, 40 000 per index) so the AI can rewrite or translate all of it; longer text is marked `…[TRUNCATED: N chars total]` and the prompt forbids rewriting it. Elements hidden by Revamp stay listed as `(HIDDEN)`. An element at least 100 × 50 px whose computed `background-image` has a `url()` layer gets ` bg-image="<computed value, up to 300 chars>"` (a plain `div` is listed as `div (block)` for this), so the AI can see the gradient layers it should keep.
+
+### Images and backgrounds
+
+| Goal | How | Where it is resolved |
+|------|-----|----------------------|
+| Replace an `<img>` | `replace_image` with an image URL, a `data:image/*` URL or `attachment:<id>` | `attachment:<id>` becomes a data URL in the panel when the change is applied |
+| Replace a CSS background | `set_style` with `background-image` (or `background`) holding `url(...)` or `url(attachment:<id>)`, followed by `!important` | same; gradient layers listed in `bg-image="…"` are kept in front of the new `url(...)` |
+
+`resolveAttachmentSources` ([attachment-refs.ts](src/utils/attachment-refs.ts)) runs only in the panel, since only the panel can read the IndexedDB store. The chat history keeps the `attachment:<id>` reference; the page, the saved demo and the export get the data URL. References in any other style property are left alone. An operation whose image is missing, not an image, or over 2,000,000 characters as a data URL is dropped with a message; the other changes still apply.
+
+**What this cannot do** (also summarised in the README):
+
+- **Pseudo-elements** (`::before`, `::after`, `::backdrop`): inline styles cannot target them, so a background drawn there is not found by the index and cannot be changed. It is possible in principle: tag the element with a `data-revamp-*` attribute and inject a `<style>` rule for `[data-revamp-x]::before`. That needs a new operation with a property whitelist, the injected rule must survive reload (demo), stay in the export while the attribute is stripped from it, and be undoable. It is not built; see TASKS.md.
+- **Backgrounds Revamp cannot see**: boxes under 100 × 50 px (icons, sprites), backgrounds set on an ancestor but painted through a transparent child, backgrounds on `<video>`, `<canvas>` or `<svg>`, and images a page loads later from script (lazy `data-bg` attributes show no computed value until the page applies them).
+- **Page CSS can override an inline change**: the prompt asks for `!important`, but a later script that rewrites the element's `style` attribute (React/Vue re-renders) can undo it. Saved demos are re-applied with retries, not guaranteed.
+- **Content Security Policy**: a page whose CSP `img-src` omits `data:` shows no uploaded image, as a `background-image` or an `<img>`. Use an image URL on the allowed domain there. A blocked image shows in the page's DevTools console as `Refused to load the image`.
+- **Size**: an uploaded image is stored inline in the demo (`chrome.storage.local`, 10 MB for everything), so one image is capped at 2,000,000 characters of data URL. Uploads are already downscaled to 1568 px, but a large PNG can still exceed the cap.
+- **Only images** can be placed: PDFs, documents and video cannot, and a video attachment is only sampled as reference frames. SVG uploads are refused.
+- **`image-set()` and several `url()` layers**: the AI sees the whole value and can rewrite it, but the tests only cover a single `url()` plus gradients.
+- **Cross-site storage**: IndexedDB in the panel iframe may be partitioned per website, so an image uploaded on one site can show as "no longer available" on another (open check in TASKS.md).
+- **The preview eye** only highlights the target; it does not show the new image before Apply.
 
 Scope is **element** when the user has a selection (that element and its descendants), otherwise **page**.
 

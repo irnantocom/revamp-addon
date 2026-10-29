@@ -15,6 +15,11 @@ const TEXT_TAGS = new Set([
 const MEDIA_TAGS = new Set(['img', 'video', 'picture', 'iframe']);
 const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'template', 'svg', 'head', 'link', 'meta']);
 
+/** Smaller boxes with a background image are icons and sprites, not something to restyle */
+const BG_MIN_WIDTH = 100;
+const BG_MIN_HEIGHT = 50;
+const BG_PREVIEW = 300;
+
 const MAX_ENTRIES = 400;
 const TEXT_PREVIEW = 80;
 /** Editable text is shown in full up to this length, so the AI can rewrite or translate all of it */
@@ -73,7 +78,9 @@ export class PageIndex {
       const hidden = !this.isVisible(el);
       if (hidden && !this.hiddenByRevamp.has(el)) return;
 
-      const line = this.describe(el, tag, hidden);
+      let line = this.describe(el, tag, hidden);
+      const background = MEDIA_TAGS.has(tag) ? '' : this.backgroundFlag(el);
+      if (background) line = `${line ?? `[${this.idOf(el)}] ${tag} (block)${hidden ? ' (HIDDEN)' : ''}`}${background}`;
       const childDepth = line ? depth + 1 : depth;
       if (line) lines.push('  '.repeat(depth) + line);
       if (hidden) return;
@@ -183,6 +190,18 @@ export class PageIndex {
     }
 
     return null;
+  }
+
+  /**
+   * The computed background-image of a sizeable element, shown whole so the AI can keep gradient
+   * layers when it swaps the picture. Empty when there is no url() layer.
+   */
+  private backgroundFlag(el: Element): string {
+    if (!(el instanceof HTMLElement)) return '';
+    const value = getComputedStyle(el).backgroundImage;
+    if (!value || !/url\(/i.test(value)) return '';
+    if (el.offsetWidth < BG_MIN_WIDTH || el.offsetHeight < BG_MIN_HEIGHT) return '';
+    return ` bg-image="${this.clip(value, BG_PREVIEW)}"`;
   }
 
   /** Text leaves are fully described by their line; their children are inline noise */

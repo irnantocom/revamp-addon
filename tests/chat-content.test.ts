@@ -142,7 +142,26 @@ describe('buildSystemPrompt with attachments', () => {
 
     const withFiles = buildSystemPrompt(data, { hasAttachments: true });
     expect(withFiles).toContain('reference material');
-    expect(withFiles).toContain('image URL');
+    expect(withFiles).toContain('attachment:<id>');
+    expect(withFiles).not.toContain('UPLOADED IMAGES');
     expect(withFiles).toContain(plain);
+  });
+
+  it('lists uploaded images by id so the model can place them with replace_image', () => {
+    const prompt = buildSystemPrompt(data, {
+      hasAttachments: true,
+      images: [{ id: 'abc-1', name: 'hero "new".png' }, { id: 'abc-2', name: 'logo.png' }],
+    });
+    expect(prompt).toContain('UPLOADED IMAGES');
+    expect(prompt).toContain('- attachment:abc-1  "hero  new .png"');
+    expect(prompt).toContain('- attachment:abc-2  "logo.png"');
+    expect(prompt).toContain('url(attachment:<id>)');
+  });
+
+  it('teaches the model to restyle a CSS background and to read bg-image entries', () => {
+    const prompt = buildSystemPrompt(data);
+    expect(prompt).toContain('bg-image="…"');
+    expect(prompt).toContain('not replace_image');
+    expect(prompt).toContain('!important');
   });
 });

@@ -41,6 +41,32 @@ describe('AzureOpenAIProvider', () => {
     );
   });
 
+  it('keeps a gateway base path in front of /openai', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json(200, ok));
+    vi.stubGlobal('fetch', fetchMock);
+
+    for (const endpoint of [
+      'https://team.azure-api.net/ai/',
+      'https://team.azure-api.net/ai/openai/deployments/x/chat/completions?api-version=2024-02-01',
+    ]) {
+      await new AzureOpenAIProvider({ ...base, endpoint }).generateCompletion(msgs, '');
+    }
+
+    for (const call of fetchMock.mock.calls) {
+      expect(call[0]).toBe(
+        'https://team.azure-api.net/ai/openai/deployments/clloh-n8n-gpt-4.1-mini/chat/completions?api-version=2024-12-01-preview'
+      );
+    }
+  });
+
+  it('shows the message from a gateway error body', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json(404, { statusCode: 404, message: 'Resource not found' })));
+
+    const result = await new AzureOpenAIProvider(base).generateCompletion(msgs, '');
+
+    expect(result.error).toContain('Resource not found (HTTP 404');
+  });
+
   it('retries with max_completion_tokens when the model rejects max_tokens', async () => {
     const fetchMock = vi
       .fn()
@@ -53,6 +79,36 @@ describe('AzureOpenAIProvider', () => {
     expect(result.success).toBe(true);
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({ max_completion_tokens: 50 });
     expect(JSON.parse(fetchMock.mock.calls[1][1].body).max_tokens).toBeUndefined();
+  });
+
+  it('retries without temperature when the model only supports the default', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(400, { error: { message: "Unsupported value: 'temperature' does not support 0 with this model. Only the default (1) value is supported." } }))
+      .mockResolvedValueOnce(json(200, ok));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await new AzureOpenAIProvider(base).generateCompletion(msgs, '', { temperature: 0 });
+
+    expect(result.success).toBe(true);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).temperature).toBe(0);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).temperature).toBeUndefined();
+  });
+
+  it('adapts to both max_tokens and temperature being rejected', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(400, { error: { message: "Unsupported parameter: 'max_tokens'. Use 'max_completion_tokens' instead." } }))
+      .mockResolvedValueOnce(json(400, { error: { message: "Unsupported value: 'temperature' does not support 0.3 with this model." } }))
+      .mockResolvedValueOnce(json(200, ok));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await new AzureOpenAIProvider(base).generateCompletion(msgs, '', { temperature: 0.3, maxTokens: 50 });
+
+    expect(result.success).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toMatchObject({ max_completion_tokens: 50 });
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body).temperature).toBeUndefined();
   });
 
   it('explains a 404 with the URL and the deployment name', async () => {

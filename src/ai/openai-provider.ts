@@ -22,26 +22,46 @@ export class OpenAIProvider implements IAIProvider {
     }
   ): Promise<AIResponse> {
     try {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.config.apiKey}`,
-          ...(this.config.organizationId && {
-            'OpenAI-Organization': this.config.organizationId,
+      let tokenParam: 'max_tokens' | 'max_completion_tokens' = 'max_tokens';
+      let sendTemperature = true;
+      const send = () =>
+        fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.config.apiKey}`,
+            ...(this.config.organizationId && {
+              'OpenAI-Organization': this.config.organizationId,
+            }),
+          },
+          body: JSON.stringify({
+            model,
+            messages: toOpenAIMessages(messages),
+            ...(sendTemperature && { temperature: options?.temperature ?? 0.7 }),
+            [tokenParam]: options?.maxTokens ?? 2000,
+            stream: options?.stream ?? false,
           }),
-        },
-        body: JSON.stringify({
-          model,
-          messages: toOpenAIMessages(messages),
-          temperature: options?.temperature ?? 0.7,
-          max_tokens: options?.maxTokens ?? 2000,
-          stream: options?.stream ?? false,
-        }),
-      });
+        });
+
+      let response = await send();
+
+      // Reasoning models (o-series, gpt-5) reject max_tokens (want max_completion_tokens)
+      // and any temperature other than the default; adapt to whichever the model complains about.
+      for (let attempt = 0; attempt < 2 && response.status === 400; attempt++) {
+        const body = await response.clone().json().catch(() => ({}));
+        const message: string = body?.error?.message || '';
+        if (tokenParam === 'max_tokens' && /max_completion_tokens/i.test(message)) {
+          tokenParam = 'max_completion_tokens';
+        } else if (sendTemperature && /temperature/i.test(message)) {
+          sendTemperature = false;
+        } else {
+          break;
+        }
+        response = await send();
+      }
 
       if (!response.ok) {
-        const error = await response.json();
+        const error = await response.json().catch(() => ({}));
         return {
           success: false,
           error: error.error?.message || 'OpenAI API request failed',

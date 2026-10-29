@@ -20,7 +20,7 @@ Changes are temporary and local to your browser. The real website is never modif
 
 AI providers with a working adapter: **OpenAI**, **Azure OpenAI**, **Anthropic Claude**, **Google Gemini**. Settings also lists Perplexity, Mistral, Cohere, Groq and OpenRouter, but those return "not yet implemented".
 
-Attachments: OpenAI, Claude and Gemini accept images and PDFs; Azure OpenAI accepts images only for now. Documents are sent as text to every provider. Attached files are sent to the provider you selected.
+Attachments: OpenAI, Claude and Gemini accept images and PDFs; Azure OpenAI accepts images only for now. Documents are sent as text to every provider. Attached files are sent to the provider you selected. An attached image can replace an image on the page ("replace the hero image with the one I uploaded"); very large images are refused, and pages with a strict Content Security Policy may block them.
 
 ## Quick start
 
@@ -72,6 +72,7 @@ If the page was open before you installed or reloaded the extension, the icon cl
 - Pages that re-render aggressively (React/Vue SPAs) may overwrite edits; Revamp re-applies saved changes with retries but cannot guarantee it.
 - Iframes and Shadow DOM content are not indexed or exported.
 - API keys are stored in `chrome.storage.local`, unencrypted.
+- Uploaded images can replace an `<img>` or a CSS background image, with limits: no pseudo-element backgrounds (`::before`/`::after`), no icons under 100 × 50 px, one image is capped at about 1.5 MB, and pages whose Content Security Policy blocks `data:` images will not show them (use an image URL there). Details in [ARCHITECTURE.md](ARCHITECTURE.md#images-and-backgrounds).
 
 ## License
 

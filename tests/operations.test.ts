@@ -114,6 +114,26 @@ describe('operations', () => {
     expect(img.getAttribute('srcset')).toBe('/a2.jpg 2x');
   });
 
+  it('replace_image accepts an uploaded image as a data URL and reverts it', () => {
+    const img = document.querySelector('img')!;
+    const src = 'data:image/png;base64,QUJD';
+    expect(run({ id: '1', op: 'replace_image', target: idOf('img'), src, explanation: '' }).success).toBe(true);
+    expect(img.getAttribute('src')).toBe(src);
+    manager.undo();
+    expect(img.getAttribute('src')).toBe('/a.jpg');
+  });
+
+  it('set_style can swap a background image for a data URL and revert it', () => {
+    const el = document.querySelector('h1') as HTMLElement;
+    el.style.backgroundImage = 'url("https://x/old.jpg")';
+    const value = 'linear-gradient(red, blue), url("data:image/png;base64,QUJD")';
+    expect(run({ id: '1', op: 'set_style', target: idOf('h1'), styles: { 'background-image': `${value} !important` }, explanation: '' }).success).toBe(true);
+    expect(el.style.getPropertyValue('background-image')).toContain('data:image/png;base64,QUJD');
+    expect(el.style.getPropertyPriority('background-image')).toBe('important');
+    manager.undo();
+    expect(el.style.getPropertyValue('background-image')).toContain('old.jpg');
+  });
+
   it('replace_image refuses non-images', () => {
     expect(run({ id: '1', op: 'replace_image', target: idOf('h1'), src: 'x', explanation: '' }).success).toBe(false);
   });
