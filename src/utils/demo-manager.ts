@@ -4,6 +4,7 @@ import { ChangeManager } from './change-manager';
 import { PageIndex } from './page-index';
 import { captureLocator, resolveLocator } from './locator';
 import { validateOperation } from './operation-parser';
+import { demoKey, getTabId } from './tab-scope';
 
 const RETRY_DELAYS_MS = [1000, 3000, 7000, 15000];
 const SAVE_DEBOUNCE_MS = 300;
@@ -56,15 +57,22 @@ export class DemoManager {
     return `${location.origin}${location.pathname}`;
   }
 
-  private get storageKey(): string {
-    return `demo:${this.pageKey}`;
+  /**
+   * The demo belongs to one browser tab, so another tab on the same page starts clean. Without a tab
+   * id there is no safe key: the demo then lives in memory only instead of landing in a shared slot.
+   */
+  private async storageKey(): Promise<string | undefined> {
+    const tabId = await getTabId();
+    return tabId === undefined ? undefined : demoKey(tabId, this.pageKey);
   }
 
-  /** Load the saved demo for this page and re-apply it */
+  /** Load the saved demo for this tab and page and re-apply it */
   async init(): Promise<void> {
     try {
-      const stored = await chrome.storage.local.get(this.storageKey);
-      const config = stored[this.storageKey] as DemoConfig | undefined;
+      const key = await this.storageKey();
+      if (!key) return;
+      const stored = await chrome.storage.session.get(key);
+      const config = stored[key] as DemoConfig | undefined;
       if (!config || config.kind !== 'revamp-demo') return;
 
       this.name = config.name || '';
@@ -237,7 +245,8 @@ export class DemoManager {
     this.suspendSave(() => this.history.undoAll());
     window.clearTimeout(this.saveTimer);
     try {
-      await chrome.storage.local.remove(this.storageKey);
+      const key = await this.storageKey();
+      if (key) await chrome.storage.session.remove(key);
     } catch (error) {
       console.error('[Demo] Failed to clear saved demo:', error);
     }
@@ -368,10 +377,12 @@ export class DemoManager {
     window.clearTimeout(this.saveTimer);
     const config = this.toConfig();
     try {
+      const key = await this.storageKey();
+      if (!key) return;
       if (config.operations.length === 0 && this.enabled && !this.name && this.annotations.length === 0) {
-        await chrome.storage.local.remove(this.storageKey);
+        await chrome.storage.session.remove(key);
       } else {
-        await chrome.storage.local.set({ [this.storageKey]: config });
+        await chrome.storage.session.set({ [key]: config });
       }
     } catch (error) {
       console.error('[Demo] Failed to save demo:', error);

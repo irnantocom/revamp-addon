@@ -3,17 +3,31 @@ import { PageIndex } from '../src/utils/page-index';
 import { ChangeManager } from '../src/utils/change-manager';
 import { DemoManager } from '../src/utils/demo-manager';
 import { captureLocator, resolveLocator } from '../src/utils/locator';
+import { getTabId } from '../src/utils/tab-scope';
+
+vi.mock('../src/utils/tab-scope', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/utils/tab-scope')>()),
+  getTabId: vi.fn(),
+}));
 
 const store: Record<string, unknown> = {};
+const local = {
+  get: vi.fn(async () => ({})),
+  set: vi.fn(async () => undefined),
+  remove: vi.fn(async () => undefined),
+};
 (globalThis as any).chrome = {
   storage: {
-    local: {
+    // The demo is working state of one tab, so it lives in session storage
+    session: {
       get: vi.fn(async (key: string) => (key in store ? { [key]: store[key] } : {})),
       set: vi.fn(async (items: Record<string, unknown>) => Object.assign(store, items)),
       remove: vi.fn(async (key: string) => { delete store[key]; }),
     },
+    local,
   },
 };
+const demoStorageKey = (tabId: number) => `tabDemo:${tabId}:${location.origin}${location.pathname}`;
 
 const PAGE = `
   <header><h1>Welcome</h1></header>
@@ -35,6 +49,10 @@ const idOf = (selector: string, nth = 0) => index.idOf(document.querySelectorAll
 
 beforeEach(() => {
   for (const k of Object.keys(store)) delete store[k];
+  vi.mocked(getTabId).mockResolvedValue(3);
+  local.get.mockClear();
+  local.set.mockClear();
+  local.remove.mockClear();
   document.body.innerHTML = PAGE;
   make();
 });
@@ -106,7 +124,7 @@ describe('DemoManager', () => {
   it('saves applied operations and replays them on a fresh page load', async () => {
     edit();
     await new Promise((r) => setTimeout(r, 400));
-    expect(Object.keys(store)).toEqual([expect.stringContaining('demo:')]);
+    expect(Object.keys(store)).toEqual([demoStorageKey(3)]);
 
     // "Reload": pristine DOM, new session objects
     document.body.innerHTML = PAGE;
@@ -119,6 +137,36 @@ describe('DemoManager', () => {
     expect(document.querySelectorAll('li')[0].textContent).toBe('Item');
     expect(document.querySelector('footer')!.nextElementSibling?.id).toBe('hero');
     expect(demo.getState().items).toHaveLength(4);
+  });
+
+  it('does not touch the old tab-independent storage', async () => {
+    edit();
+    await new Promise((r) => setTimeout(r, 400));
+    expect(local.set).not.toHaveBeenCalled();
+  });
+
+  it('starts empty in another tab that shows the same page', async () => {
+    edit();
+    await new Promise((r) => setTimeout(r, 400));
+
+    vi.mocked(getTabId).mockResolvedValue(4);
+    document.body.innerHTML = PAGE;
+    make();
+    await demo.init();
+
+    expect(document.querySelector('h1')!.textContent).toBe('Welcome');
+    expect(demo.getState().items).toHaveLength(0);
+  });
+
+  it('works in memory and writes nothing when the tab id is unknown', async () => {
+    vi.mocked(getTabId).mockResolvedValue(undefined);
+    await demo.init();
+    edit();
+    await new Promise((r) => setTimeout(r, 400));
+
+    expect(document.querySelector('h1')!.textContent).toBe('Sail Beyond');
+    expect(Object.keys(store)).toHaveLength(0);
+    await expect(demo.reset()).resolves.toBeUndefined();
   });
 
   it('keeps changes pending when the element is not on the page yet', async () => {
@@ -134,7 +182,7 @@ describe('DemoManager', () => {
     expect(state.items.filter((i) => i.status === 'pending')).toHaveLength(3);
     // pending changes survive being saved again
     await new Promise((r) => setTimeout(r, 400));
-    expect((store[`demo:${location.origin}${location.pathname}`] as any).operations).toHaveLength(4);
+    expect((store[demoStorageKey(3)] as any).operations).toHaveLength(4);
   });
 
   it('turning demo mode off restores the page and keeps the saved changes', async () => {
