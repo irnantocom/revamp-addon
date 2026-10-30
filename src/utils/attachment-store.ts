@@ -51,3 +51,31 @@ export function createIndexedDbStore(dbName = 'revamp-attachments'): AttachmentS
     },
   };
 }
+
+const TAB_DB = /^revamp-attachments-(\d+)$/;
+const LEGACY_DB = 'revamp-attachments';
+
+/**
+ * Closing a tab does not delete its database, so remove the ones whose tab is gone. The old shared
+ * database goes too: the chat that referenced its files is no longer kept.
+ */
+export async function purgeOrphanAttachmentDatabases(openTabIds: number[]): Promise<void> {
+  if (typeof indexedDB === 'undefined' || typeof indexedDB.databases !== 'function') return;
+  const open = new Set(openTabIds);
+  const names = (await indexedDB.databases()).map((d) => d.name ?? '');
+  const orphans = names.filter((name) => {
+    if (name === LEGACY_DB) return true;
+    const match = TAB_DB.exec(name);
+    return match !== null && !open.has(Number(match[1]));
+  });
+  await Promise.all(
+    orphans.map(
+      (name) =>
+        new Promise<void>((resolve) => {
+          const req = indexedDB.deleteDatabase(name);
+          // A blocked delete finishes once the other connection closes; do not wait for it
+          req.onsuccess = req.onerror = req.onblocked = () => resolve();
+        })
+    )
+  );
+}

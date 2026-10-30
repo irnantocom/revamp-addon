@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createIndexedDbStore } from '../src/utils/attachment-store';
+import { createIndexedDbStore, purgeOrphanAttachmentDatabases } from '../src/utils/attachment-store';
 import type { StoredAttachment } from '../src/types/attachments';
 import { attachmentStoreFor, memoryAttachmentStore } from '../src/popup/attachment-store-instance';
 
@@ -69,5 +69,35 @@ describe('memory attachment store (no tab id)', () => {
     expect(await store.get('a')).toEqual(make('a'));
     await store.clear();
     expect(await store.get('a')).toBeUndefined();
+  });
+});
+
+describe('purgeOrphanAttachmentDatabases', () => {
+  // The store keeps its connection open, which would block the delete; a closed connection is what an orphan is
+  const seed = (dbName: string) =>
+    new Promise<void>((resolve, reject) => {
+      const req = indexedDB.open(dbName, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('attachments', { keyPath: 'meta.id' });
+      req.onsuccess = () => {
+        req.result.close();
+        resolve();
+      };
+      req.onerror = () => reject(req.error);
+    });
+  const names = async () => (await indexedDB.databases()).map((d) => d.name).filter((n) => n?.startsWith('revamp-attachments'));
+
+  it('deletes the databases of tabs that are gone, and the old shared one', async () => {
+    for (const dbName of ['revamp-attachments', 'revamp-attachments-901', 'revamp-attachments-902', 'revamp-attachments-903']) {
+      await seed(dbName);
+    }
+    // Tabs 1 and 2 are the open stores from the tests above
+    await purgeOrphanAttachmentDatabases([1, 2, 902]);
+    expect((await names()).sort()).toEqual(['revamp-attachments-1', 'revamp-attachments-2', 'revamp-attachments-902']);
+  });
+
+  it('leaves databases that are not Revamp attachment stores alone', async () => {
+    await seed('something-else');
+    await purgeOrphanAttachmentDatabases([1, 2, 902]);
+    expect((await indexedDB.databases()).map((d) => d.name)).toContain('something-else');
   });
 });

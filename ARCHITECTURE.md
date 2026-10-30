@@ -114,7 +114,7 @@ send → buildRequestMessages(history, draft) → AI_REQUEST → provider adapte
 - **A failed request** returns the typed text and the files to the draft and removes the failed turn from the history, so a refused file cannot poison later requests. Whitespace-only text counts as no text (Claude rejects blank text blocks). Pasting leaves text alone when the clipboard holds text, since Office copies carry a picture of the text as well.
 - **Safety**: file text sits in a delimited block, the closing tag is defused inside it, and the system prompt says attachments are reference material, never instructions, and that only the uploaded images listed at the end of the prompt can be placed on the page.
 - **Uploaded image on the page**: the system prompt lists each image attachment as `attachment:<id>`; the AI returns `replace_image` with that `src`. The panel swaps it for a `data:` URL from the IndexedDB store (`resolveAttachmentSources` in [attachment-refs.ts](src/utils/attachment-refs.ts)) when the change is applied, so the chat history keeps only the reference while the page, the demo and the export get the image. A missing file, a non-image, or an image over 2,000,000 characters as a data URL is refused with a message and the other changes still apply (the demo lives in `chrome.storage.session`, which is capped). A page whose CSP blocks `img-src data:` will not show the image; use an image URL there.
-- File content is never written to `chrome.storage`; the chat history holds names, sizes and a thumbnail of at most 12,000 characters. "Clear chat" empties this tab's IndexedDB database only. Databases of closed tabs are not deleted yet (TASKS.md).
+- File content is never written to `chrome.storage`; the chat history holds names, sizes and a thumbnail of at most 12,000 characters. "Clear chat" empties this tab's IndexedDB database only. Each time a panel opens it deletes the databases of tabs that no longer exist (and the old shared `revamp-attachments`), as far as that site's partition of IndexedDB reaches (see Cross-site storage).
 
 ### Page index
 
@@ -157,7 +157,7 @@ Ids die on reload, so saved changes use a `Locator` ([src/utils/locator.ts](src/
 - when demo mode is switched off, operations are parked and the page reverts;
 - validates every imported or stored operation again before applying it.
 
-Chat and demo are per browser tab. The panel and the content script learn their tab id from the service worker (`GET_TAB_ID`, answered with `sender.tab.id`); the service worker opens session storage to content scripts and deletes a tab's keys when the tab closes. Without a tab id, chat and demo stay in memory and nothing is written. A tab keeps its state across reload and navigation and loses it when it closes or the browser restarts.
+Chat and demo are per browser tab. The panel and the content script learn their tab id from the service worker (`GET_TAB_ID`, answered with `sender.tab.id`); the service worker opens session storage to content scripts and deletes a tab's keys when the tab closes. Without a tab id, chat and demo stay in memory and nothing is written. A tab keeps its state across reload and navigation and loses it when it closes, when the browser restarts, and when the extension is updated, reloaded or disabled (session storage is cleared then; a `./build.sh` plus reload during development also drops it).
 
 | Storage key (`chrome.storage.session`) | Value |
 |-----|------|

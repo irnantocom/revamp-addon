@@ -6,6 +6,7 @@ import AIChatBox from './components/AIChatBox';
 import Settings from './components/Settings';
 import DemoPanel from './components/DemoPanel';
 import { InspectedElement } from '../types/inspector';
+import { purgeOrphanAttachmentDatabases } from '../utils/attachment-store';
 
 type Tab = 'inspector' | 'editor' | 'ai' | 'demo' | 'export' | 'settings';
 
@@ -14,6 +15,14 @@ const App: React.FC = () => {
   const [selectedElement, setSelectedElement] = useState<InspectedElement | null>(null);
   // Prompt handed from another tab (e.g. notes) to the AI chat input
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Files of tabs that were closed stay in IndexedDB until someone removes them
+    chrome.tabs
+      .query({})
+      .then((tabs) => purgeOrphanAttachmentDatabases(tabs.flatMap((t) => (t.id === undefined ? [] : [t.id]))))
+      .catch((error) => console.warn('[Revamp] Could not remove attachments of closed tabs:', error));
+  }, []);
 
   useEffect(() => {
     // Listen for element selection from content script
