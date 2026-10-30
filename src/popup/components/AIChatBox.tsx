@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { AIResponseParser } from '../../utils/ai-response-parser';
 import { AIRevampResponse, AIChange } from '../../types/ai-response';
 import { Operation, OperationsResponse } from '../../types/operations';
@@ -9,7 +9,8 @@ import { InspectedElement } from '../../types/inspector';
 import ChangePreview, { ChangeItem, PreviewStatus } from './ChangePreview';
 import AttachmentChips from './AttachmentChips';
 import { pastedImageFiles, useAttachments } from '../use-attachments';
-import { attachmentStore } from '../attachment-store-instance';
+import { attachmentStoreFor, memoryAttachmentStore } from '../attachment-store-instance';
+import { chatKey, getTabId } from '../../utils/tab-scope';
 import { acceptedFileTypes, getCapabilities, providerLabel } from '../../ai/capabilities';
 import { buildRequestMessages } from '../../utils/chat-content';
 import { AttachmentMeta } from '../../types/attachments';
@@ -90,8 +91,23 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [draggingFiles, setDraggingFiles] = useState(false);
+  // Chat and files belong to this browser tab; undefined until resolved, and stays undefined if it cannot be
+  const [tabId, setTabId] = useState<number | undefined>(undefined);
+  const [tabResolved, setTabResolved] = useState(false);
+  const fallbackStore = useRef(memoryAttachmentStore());
+  const attachmentStore = useMemo(
+    () => (tabId === undefined ? fallbackStore.current : attachmentStoreFor(tabId)),
+    [tabId]
+  );
   const caps = getCapabilities(provider);
   const attachments = useAttachments(caps, attachmentStore);
+
+  useEffect(() => {
+    getTabId().then((id) => {
+      setTabId(id);
+      setTabResolved(true);
+    });
+  }, []);
 
   // Provider labels for display
   const providerLabels: Record<string, string> = {
@@ -119,14 +135,17 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
     openrouter: ['openai/gpt-4o', 'anthropic/claude-3.5-sonnet', 'google/gemini-2.0-flash-exp:free'],
   };
 
-  // Load chat history from storage on mount
+  // Load this tab's chat history on mount
   useEffect(() => {
+    // Without a tab id the chat stays in memory: saving to a shared key would leak it into other tabs
+    if (!tabResolved || tabId === undefined) return;
     const loadChatHistory = async () => {
       try {
-        const result = await chrome.storage.local.get(['chatHistory']);
-        if (result.chatHistory && Array.isArray(result.chatHistory)) {
-          console.log('[AI Chat] Loaded chat history:', result.chatHistory.length, 'messages');
-          setMessages(result.chatHistory);
+        const result = await chrome.storage.session.get(chatKey(tabId));
+        const saved = result[chatKey(tabId)];
+        if (Array.isArray(saved)) {
+          console.log('[AI Chat] Loaded chat history:', saved.length, 'messages');
+          setMessages(saved);
         } else {
           console.log('[AI Chat] No chat history found in storage');
         }
@@ -138,17 +157,17 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
     };
 
     loadChatHistory();
-  }, []);
+  }, [tabResolved, tabId]);
 
   // Save chat history to storage whenever messages change (with debounce)
   useEffect(() => {
     // Don't save until messages are loaded to avoid overwriting with empty array
-    if (!messagesLoaded) return;
+    if (!messagesLoaded || tabId === undefined) return;
 
     // Debounce save to avoid too many writes
     const timeoutId = setTimeout(async () => {
       try {
-        await chrome.storage.local.set({ chatHistory: messages });
+        await chrome.storage.session.set({ [chatKey(tabId)]: messages });
         console.log('[AI Chat] Saved chat history:', messages.length, 'messages');
       } catch (error) {
         console.error('[AI Chat] Failed to save chat history:', error);
@@ -156,7 +175,7 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
     }, 500); // 500ms debounce
 
     return () => clearTimeout(timeoutId);
-  }, [messages, messagesLoaded]);
+  }, [messages, messagesLoaded, tabId]);
 
   // Load API keys and determine available providers
   useEffect(() => {
@@ -251,30 +270,6 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
     
     return () => {
       chrome.runtime.onMessage.removeListener(handleMessage);
-    };
-  }, []);
-
-  // Listen for storage changes (sync across popup instances)
-  useEffect(() => {
-    const handleStorageChange = (changes: any, areaName: string) => {
-      if (areaName === 'local' && changes.chatHistory) {
-        console.log('[AI Chat] Storage changed externally, syncing...');
-        const newValue = changes.chatHistory.newValue;
-        if (newValue && Array.isArray(newValue)) {
-          setMessages(newValue);
-          console.log('[AI Chat] Synced', newValue.length, 'messages from storage');
-        } else if (newValue === undefined || newValue === null) {
-          // Storage was cleared
-          setMessages([]);
-          console.log('[AI Chat] Storage cleared, resetting messages');
-        }
-      }
-    };
-
-    chrome.storage.onChanged.addListener(handleStorageChange);
-    
-    return () => {
-      chrome.storage.onChanged.removeListener(handleStorageChange);
     };
   }, []);
 
@@ -477,19 +472,13 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
       attachments.clear();
       attachmentStore.clear().catch((error) => console.error('[AI Chat] Failed to clear attachments:', error));
       
-      // Then clear from storage to ensure it's synced
-      try {
-        await chrome.storage.local.remove(['chatHistory']);
-        console.log('[AI Chat] ✓ Chat history cleared from storage');
-        
-        // Verify deletion
-        const verify = await chrome.storage.local.get(['chatHistory']);
-        if (verify.chatHistory) {
-          console.warn('[AI Chat] Storage still has data, trying again...');
-          await chrome.storage.local.set({ chatHistory: [] });
+      if (tabId !== undefined) {
+        try {
+          await chrome.storage.session.remove(chatKey(tabId));
+          console.log('[AI Chat] ✓ Chat history cleared from storage');
+        } catch (error) {
+          console.error('[AI Chat] Failed to clear chat history from storage:', error);
         }
-      } catch (error) {
-        console.error('[AI Chat] Failed to clear chat history from storage:', error);
       }
     } else {
       console.log('[AI Chat] Clear cancelled by user');
