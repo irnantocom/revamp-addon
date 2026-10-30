@@ -9,6 +9,7 @@ import { GeminiProvider } from '../ai/gemini-provider';
 import { AzureOpenAIProvider } from '../ai/azure-openai-provider';
 import type { AIRequest } from '../ai/provider-interface';
 import { assertPayloadSize } from './payload-guard';
+import { purgeTabState } from './tab-state';
 
 interface Message {
   type: string;
@@ -50,6 +51,17 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 });
 
+// The content script persists its demo in session storage, which is closed to it by default
+chrome.storage.session
+  .setAccessLevel({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' })
+  .catch((error) => console.error('[Revamp] Could not open session storage to content scripts:', error));
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  purgeTabState(chrome.storage.session, tabId).catch((error) =>
+    console.error('[Revamp] Failed to discard tab state:', error)
+  );
+});
+
 // Extension installation/update handler
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {
@@ -63,6 +75,8 @@ chrome.runtime.onInstalled.addListener((details) => {
     });
   } else if (details.reason === 'update') {
     console.log('[Revamp] Extension updated');
+    // Chat history used to be one global list; it is per tab now
+    chrome.storage.local.remove('chatHistory').catch(() => {});
   }
 });
 
@@ -78,6 +92,11 @@ chrome.runtime.onMessage.addListener(
     switch (message.type) {
       case 'PING':
         sendResponse({ success: true, data: 'pong' });
+        break;
+
+      case 'GET_TAB_ID':
+        if (sender.tab?.id !== undefined) sendResponse({ success: true, data: sender.tab.id });
+        else sendResponse({ success: false, error: 'No tab' });
         break;
 
       case 'GET_SETTINGS':
