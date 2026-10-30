@@ -329,8 +329,8 @@ class RevampInspector {
   private createFloatingPanel(): void {
     if (this.panelElement) return;
 
-    // Load saved position/size from localStorage
-    const savedPos = this.loadPanelPosition();
+    // Position is not restored: each open starts at the right edge so a panel
+    // dragged off-screen last time can never open unreachable.
     const savedSize = this.loadPanelSize();
 
     // Create container
@@ -339,8 +339,8 @@ class RevampInspector {
     container.setAttribute('data-revamp-ui', 'true');
     container.style.cssText = `
       position: fixed;
-      ${savedPos.x !== null ? `left: ${savedPos.x}px;` : 'right: 20px;'}
-      ${savedPos.y !== null ? `top: ${savedPos.y}px;` : 'top: 80px;'}
+      right: 20px;
+      top: 80px;
       width: ${savedSize.width ?? 420}px;
       height: ${savedSize.height ?? 600}px;
       z-index: 2147483647;
@@ -510,9 +510,6 @@ class RevampInspector {
       
       // Re-enable text selection
       document.body.style.userSelect = '';
-
-      // Save position to localStorage
-      this.savePanelPosition(panel.offsetLeft, panel.offsetTop);
     };
 
     // Attach event listeners
@@ -617,32 +614,6 @@ class RevampInspector {
       console.warn('[Revamp] Failed to load panel size:', error);
     }
     return { width: null, height: null };
-  }
-
-  /**
-   * Save panel position to localStorage
-   */
-  private savePanelPosition(x: number, y: number): void {
-    try {
-      localStorage.setItem('revamp-panel-position', JSON.stringify({ x, y }));
-    } catch (error) {
-      console.warn('[Revamp] Failed to save panel position:', error);
-    }
-  }
-
-  /**
-   * Load panel position from localStorage
-   */
-  private loadPanelPosition(): { x: number | null; y: number | null } {
-    try {
-      const saved = localStorage.getItem('revamp-panel-position');
-      if (saved) {
-        return JSON.parse(saved);
-      }
-    } catch (error) {
-      console.warn('[Revamp] Failed to load panel position:', error);
-    }
-    return { x: null, y: null };
   }
 
   /**
