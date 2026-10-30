@@ -103,7 +103,7 @@ file → readAttachment (panel)        → StoredAttachment { meta, parts[], byt
         ├─ type from magic bytes (extension and file.type are ignored; SVG refused)
         ├─ image: downscaled to 1568 px; PDF: base64; video: 6 JPEG frames (+ a text part with their times)
         └─ DOCX/TXT/MD/CSV/JSON/HTML: text, capped at 60,000 chars, wrapped in <attached_file name="...">
-meta → chatHistory (chrome.storage); parts → IndexedDB "revamp-attachments"
+meta → tabChat:<tabId> (chrome.storage.session); parts → IndexedDB "revamp-attachments-<tabId>"
 send → buildRequestMessages(history, draft) → AI_REQUEST → provider adapter maps ContentPart to its wire format
 ```
 
@@ -113,8 +113,8 @@ send → buildRequestMessages(history, draft) → AI_REQUEST → provider adapte
 - **Images** are sent as they are only when small (3.5 MB or less) and within 1568 px; otherwise they are re-encoded as JPEG. GIFs always become a PNG of their first frame (Gemini takes no GIF, OpenAI no animated one). Claude's 5 MB image limit is the reason for the size rule.
 - **A failed request** returns the typed text and the files to the draft and removes the failed turn from the history, so a refused file cannot poison later requests. Whitespace-only text counts as no text (Claude rejects blank text blocks). Pasting leaves text alone when the clipboard holds text, since Office copies carry a picture of the text as well.
 - **Safety**: file text sits in a delimited block, the closing tag is defused inside it, and the system prompt says attachments are reference material, never instructions, and that only the uploaded images listed at the end of the prompt can be placed on the page.
-- **Uploaded image on the page**: the system prompt lists each image attachment as `attachment:<id>`; the AI returns `replace_image` with that `src`. The panel swaps it for a `data:` URL from the IndexedDB store (`resolveAttachmentSources` in [attachment-refs.ts](src/utils/attachment-refs.ts)) when the change is applied, so the chat history keeps only the reference while the page, the demo and the export get the image. A missing file, a non-image, or an image over 2,000,000 characters as a data URL is refused with a message and the other changes still apply (the demo lives in `chrome.storage.local`, which is capped). A page whose CSP blocks `img-src data:` will not show the image; use an image URL there.
-- File content is never written to `chrome.storage`; `chatHistory` holds names, sizes and a thumbnail of at most 12,000 characters. "Clear chat" empties the IndexedDB store.
+- **Uploaded image on the page**: the system prompt lists each image attachment as `attachment:<id>`; the AI returns `replace_image` with that `src`. The panel swaps it for a `data:` URL from the IndexedDB store (`resolveAttachmentSources` in [attachment-refs.ts](src/utils/attachment-refs.ts)) when the change is applied, so the chat history keeps only the reference while the page, the demo and the export get the image. A missing file, a non-image, or an image over 2,000,000 characters as a data URL is refused with a message and the other changes still apply (the demo lives in `chrome.storage.session`, which is capped). A page whose CSP blocks `img-src data:` will not show the image; use an image URL there.
+- File content is never written to `chrome.storage`; the chat history holds names, sizes and a thumbnail of at most 12,000 characters. "Clear chat" empties this tab's IndexedDB database only. Databases of closed tabs are not deleted yet (TASKS.md).
 
 ### Page index
 
@@ -135,7 +135,7 @@ send → buildRequestMessages(history, draft) → AI_REQUEST → provider adapte
 - **Backgrounds Revamp cannot see**: boxes under 100 × 50 px (icons, sprites), backgrounds set on an ancestor but painted through a transparent child, backgrounds on `<video>`, `<canvas>` or `<svg>`, and images a page loads later from script (lazy `data-bg` attributes show no computed value until the page applies them).
 - **Page CSS can override an inline change**: the prompt asks for `!important`, but a later script that rewrites the element's `style` attribute (React/Vue re-renders) can undo it. Saved demos are re-applied with retries, not guaranteed.
 - **Content Security Policy**: a page whose CSP `img-src` omits `data:` shows no uploaded image, as a `background-image` or an `<img>`. Use an image URL on the allowed domain there. A blocked image shows in the page's DevTools console as `Refused to load the image`.
-- **Size**: an uploaded image is stored inline in the demo (`chrome.storage.local`, 10 MB for everything), so one image is capped at 2,000,000 characters of data URL. Uploads are already downscaled to 1568 px, but a large PNG can still exceed the cap.
+- **Size**: an uploaded image is stored inline in the demo (`chrome.storage.session`, 10 MB for everything), so one image is capped at 2,000,000 characters of data URL. Uploads are already downscaled to 1568 px, but a large PNG can still exceed the cap.
 - **Only images** can be placed: PDFs, documents and video cannot, and a video attachment is only sampled as reference frames. SVG uploads are refused.
 - **`image-set()` and several `url()` layers**: the AI sees the whole value and can rewrite it, but the tests only cover a single `url()` plus gradients.
 - **Cross-site storage**: IndexedDB in the panel iframe may be partitioned per website, so an image uploaded on one site can show as "no longer available" on another (open check in TASKS.md).
@@ -157,18 +157,23 @@ Ids die on reload, so saved changes use a `Locator` ([src/utils/locator.ts](src/
 - when demo mode is switched off, operations are parked and the page reverts;
 - validates every imported or stored operation again before applying it.
 
+Chat and demo are per browser tab. The panel and the content script learn their tab id from the service worker (`GET_TAB_ID`, answered with `sender.tab.id`); the service worker opens session storage to content scripts and deletes a tab's keys when the tab closes. Without a tab id, chat and demo stay in memory and nothing is written. A tab keeps its state across reload and navigation and loses it when it closes or the browser restarts.
+
+| Storage key (`chrome.storage.session`) | Value |
+|-----|------|
+| `tabChat:<tabId>` | AI chat messages of that tab; attachments as metadata only |
+| `tabDemo:<tabId>:<origin><pathname>` | `DemoConfig` for that page in that tab |
+
 | Storage key (`chrome.storage.local`) | Value |
 |-----|------|
 | `settings` | `{ aiProvider, apiKeys, azure: { endpoint, apiVersion, deployment }, ... }` |
-| `demo:<origin><pathname>` | `DemoConfig` for that page |
 | `demoVersions:<origin><pathname>` | `DemoVersion[]` |
 | `localStorage["revamp-panel-position"]` (host page) | floating panel x/y |
-| `chatHistory` | AI chat messages; attachments as metadata only |
-| IndexedDB `revamp-attachments` | file content (`StoredAttachment`) for chat attachments |
+| IndexedDB `revamp-attachments-<tabId>` | file content (`StoredAttachment`) for chat attachments of that tab |
 
 ## 5. Message reference
 
-**Panel/content script → service worker:** `PING`, `GET_SETTINGS`, `UPDATE_SETTINGS`, `AI_REQUEST`, `FETCH_MODELS`, `VALIDATE_API_KEY`, `CAPTURE_VISIBLE_TAB`, `INJECT_CONTENT_SCRIPT`.
+**Panel/content script → service worker:** `PING`, `GET_SETTINGS`, `UPDATE_SETTINGS`, `AI_REQUEST`, `FETCH_MODELS`, `VALIDATE_API_KEY`, `CAPTURE_VISIBLE_TAB`, `INJECT_CONTENT_SCRIPT`, `GET_TAB_ID` (reply `{ success, data: tabId }`; `success: false` when the sender has no tab).
 
 **Panel → content script** (via `chrome.tabs.sendMessage`):
 

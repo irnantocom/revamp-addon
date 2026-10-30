@@ -38,7 +38,7 @@ Before finishing any change run `npm run type-check` and `npm test`. Behaviour i
 1. The "popup" is an iframe the content script injects into the page; the toolbar icon sends `TOGGLE_PANEL`. There is no browser-action popup.
 2. Panel to page messages go through `sendToTab` ([src/popup/tab-messaging.ts](src/popup/tab-messaging.ts)); the router is the `switch` in [src/content/content-script.ts](src/content/content-script.ts).
 3. Elements are identified by Revamp ids from `PageIndex` (a `WeakMap`, nothing written to the DOM). Ids do not survive reload.
-4. Persistence uses `Locator` (selector + tag + text start + ordinal), stored in `chrome.storage.local` under `demo:<origin><pathname>`.
+4. Persistence uses `Locator` (selector + tag + text start + ordinal), stored in `chrome.storage.session` under `tabDemo:<tabId>:<origin><pathname>` (per tab; the tab id comes from `getTabId` in [src/utils/tab-scope.ts](src/utils/tab-scope.ts)).
 5. Export is split: the content script captures a `PageSnapshot`; the panel builds the ZIP in `buildStaticSite` ([src/export/build-package.ts](src/export/build-package.ts)).
 
 ## Conventions
@@ -60,7 +60,7 @@ Before finishing any change run `npm run type-check` and `npm test`. Behaviour i
 - `.gitignore` ignores every root `*.md` except the ones it whitelists. A new root-level doc is silently untracked unless it is whitelisted. Currently allowed: README, ARCHITECTURE, CLAUDE, design, PRD, TASKS.
 - Settings lists nine providers; only OpenAI, Azure OpenAI, Claude and Gemini have adapters in the service worker. The rest return "not yet implemented". Do not claim support for them.
 - `AIChatBox` first tries the operations format and falls back to the older selector-based format ([src/utils/ai-response-parser.ts](src/utils/ai-response-parser.ts), [src/utils/legacy-changes.ts](src/utils/legacy-changes.ts)). Keep the fallback working until it is deliberately removed.
-- Never write file content (attachment `parts`) to `chrome.storage` or `chatHistory`: it is mirrored between panels and capped at 10 MB. Metadata only; content goes to IndexedDB through `attachmentStore`. Decide a file's type from its bytes (`sniffFileType`), never from its name or `file.type`.
+- Never write file content (attachment `parts`) to `chrome.storage` or the per-tab chat history (`tabChat:<tabId>`): both are capped at 10 MB. Metadata only; content goes to IndexedDB through `attachmentStoreFor(tabId)`. Decide a file's type from its bytes (`sniffFileType`), never from its name or `file.type`.
 - Attachments reach the model only through `buildRequestMessages` and the adapters' converters in `src/ai/message-format.ts`; add a provider's attachment support by extending `src/ai/capabilities.ts` and its converter.
 - Page text in the AI index is sent in full (up to 800 characters per element). Do not shorten it for brevity; truncation caused the AI to rewrite text it had not seen.
 - `chrome.tabs.captureVisibleTab` is rate limited (about 2 calls per second); full-page screenshots wait between frames on purpose.
