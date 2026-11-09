@@ -41,6 +41,19 @@ describe('AzureOpenAIProvider', () => {
     );
   });
 
+  it('lowers the token limit to the ceiling the deployment reports', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(400, { error: { message: 'max_tokens is too large: 32768. This model supports at most 4096 completion tokens, whereas you provided 32768.' } }))
+      .mockResolvedValueOnce(json(200, ok));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await new AzureOpenAIProvider(base).generateCompletion(msgs, '', { maxTokens: 32768 });
+
+    expect(result.success).toBe(true);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({ max_tokens: 4096 });
+  });
+
   it('keeps a gateway base path in front of /openai', async () => {
     const fetchMock = vi.fn().mockResolvedValue(json(200, ok));
     vi.stubGlobal('fetch', fetchMock);

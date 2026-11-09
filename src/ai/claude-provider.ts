@@ -56,6 +56,7 @@ export class ClaudeProvider implements IAIProvider {
         success: true,
         content: data.content[0]?.text || '',
         ...(data.stop_reason === 'max_tokens' && { truncated: true }),
+        ...(data.stop_reason && { finishReason: String(data.stop_reason) }),
         usage: {
           promptTokens: data.usage?.input_tokens || 0,
           completionTokens: data.usage?.output_tokens || 0,

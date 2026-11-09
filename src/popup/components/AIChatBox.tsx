@@ -6,6 +6,7 @@ import { parseOperationsResponse } from '../../utils/operation-parser';
 import { buildSystemPrompt, PageIndexData } from '../../utils/prompt-builder';
 import { resolveAttachmentSources } from '../../utils/attachment-refs';
 import { fetchWebImages, pageUrlsFrom, WebImageSource } from '../../utils/web-images';
+import { Ask, completeReply, describeEmptyReply, ReplyInfo } from '../../utils/reply-continuation';
 import { InspectedElement } from '../../types/inspector';
 import ChangePreview, { ChangeItem, PreviewStatus } from './ChangePreview';
 import AttachmentChips from './AttachmentChips';
@@ -36,6 +37,9 @@ const ensureContentScript = async (tabId: number): Promise<boolean> => {
   console.error('[AI Chat] Content script failed to load after retries');
   return false;
 };
+
+/** The model answered, but with nothing to parse: not an API-key problem, and worth retrying */
+class EmptyReplyError extends Error {}
 
 interface Message {
   id: string;
@@ -375,25 +379,33 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
         );
       }
 
-      const response = await chrome.runtime.sendMessage({
-        type: 'AI_REQUEST',
-        payload: {
-          provider,
-          model,
-          messages: built.messages,
-          options: {
-            // Translating or rewriting a whole page needs room: every changed text is returned in full
-            maxTokens: provider === 'azure' || /2\.5|2\.0|gpt-4o|gpt-4\.1/.test(model) ? 8192 : 4096,
-            temperature: 0.3,
-          },
-        },
-      });
+      // Translating or rewriting a whole page needs room: every changed text is returned in full
+      const maxTokens = provider === 'azure' || /2\.5|2\.0|gpt-4o|gpt-4\.1/.test(model) ? 8192 : 4096;
+      const ask: Ask = (messages, tokens) =>
+        chrome.runtime.sendMessage({
+          type: 'AI_REQUEST',
+          payload: { provider, model, messages, options: { maxTokens: tokens, temperature: 0.3 } },
+        });
+      // chrome.runtime.sendMessage answers untyped; the usage block is read below
+      const response: any = await ask(built.messages, maxTokens);
 
       if (response.success) {
         // Parse AI response for actionable changes
-        const aiContent = response.data.content;
+        let aiContent: string = response.data.content ?? '';
+        let cutOff = !!response.data.truncated;
+        let lastReply: ReplyInfo | undefined = response.data;
+        if (cutOff) {
+          const finished = await completeReply(ask, built.messages, maxTokens, { content: aiContent, truncated: true, info: response.data });
+          aiContent = finished.content;
+          cutOff = finished.truncated;
+          lastReply = finished.last ?? lastReply;
+          if (finished.extraRequests > 0) {
+            requestNotes.push(`The reply hit the output limit, so the AI was asked ${finished.extraRequests} more time(s) to finish it.`);
+          }
+        }
         
-        console.log('[AI Chat] Received AI response, length:', aiContent.length);
+        console.log('[AI Chat] Received AI response, length:', aiContent.length, 'finish reason:', lastReply?.finishReason, 'usage:', lastReply?.usage);
+        if (!aiContent.trim()) throw new EmptyReplyError(describeEmptyReply({ ...lastReply, truncated: cutOff }));
         console.log('[AI Chat] Response preview:', aiContent.substring(0, 300));
         
         // Check if response was truncated
@@ -406,7 +418,7 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
           }
         }
         
-        if (response.data.truncated) {
+        if (cutOff) {
           truncationWarning +=
             '\n\n⚠️ The reply was cut off at the output limit, so some changes may be missing. Ask again for the sections that were not changed.';
         }
@@ -497,7 +509,7 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: `Error: ${error}. Please check your API key in Settings.`,
+        content: error instanceof EmptyReplyError ? error.message : `Error: ${error}. Please check your API key in Settings.`,
         timestamp: Date.now(),
       };
       // The request did not go through: give the draft back and keep the failed turn (and its files) out of the history

@@ -84,7 +84,8 @@ RULES:
 9. set_text replaces everything inside the element, including links and bold text. For an element that contains links, keep its wording and link text intact unless the user asked to change them.
 10. A CSS background picture (an entry with bg-image="…") is changed with set_style on that element, not replace_image, which is for <img> only. Write "background-image" with the new url(...) followed by " !important" so the page's own CSS cannot override it. If the current value has gradient layers, keep them in front of the new url(...), as in "linear-gradient(rgba(0,0,0,.5),rgba(0,0,0,.5)), url(https://...) !important". If you cannot see an element's background, do not guess a target.
 11. When the user gives a document or text to replace the page's content, map it onto the page's sections in order and keep each element's role: heading text goes in a heading, description text in a paragraph, button text in a button. Make repeated items (cards, list rows, team members) match the number of items in the document: duplicate a copy to add one, hide a copy to drop one. A section or item with no matching content must not keep its old text: hide it with set_visibility (visible false), never remove it, and list what you hid in "warnings". Never hide the header, navigation or footer, and never leave placeholder or unrelated text behind.
-12. If the request cannot be done with these operations, return an empty "operations" list and say why in "explanation".
+12. Replies have an output limit. With more than 15 operations, keep each "explanation" to 3 words or fewer and write the JSON compactly, without indentation or blank lines, so the whole reply fits.
+13. If the request cannot be done with these operations, return an empty "operations" list and say why in "explanation".
 
 OUTPUT: respond with ONE JSON object in a \`\`\`json code block, nothing else needed:
 

@@ -292,3 +292,64 @@ describe('AIChatBox: images from a web page named in the message', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe('AIChatBox: a reply that hits the output limit', () => {
+  const op = (n: number) => ({ id: `op-${n}`, op: 'set_text', target: n, text: `T${n}`, explanation: 'e' });
+  const json = (ops: unknown[]) => '```json\n' + JSON.stringify({ explanation: 'x', operations: ops, warnings: [] }) + '\n```';
+  const cutOff = json([op(1), op(2)]).replace(/\n```$/, '').replace(/\}\]/, '}, {"id":"op-9","op":"set_te');
+
+  const answerWith = (replies: any[]) => {
+    const original = (globalThis as any).chrome.runtime.sendMessage;
+    (globalThis as any).chrome.runtime.sendMessage = vi.fn(async (message: any) => {
+      if (message.type !== 'AI_REQUEST') return original(message);
+      requests.push(message.payload);
+      return replies[requests.length - 1] ?? replies[replies.length - 1];
+    });
+  };
+
+  it('asks the model for the rest, merges the answers and says so', async () => {
+    answerWith([
+      { success: true, data: { content: cutOff, truncated: true, usage: {} } },
+      { success: true, data: { content: json([op(3), op(4)]), usage: {} } },
+    ]);
+    await typeText('rewrite the page');
+    await send();
+
+    expect(requests).toHaveLength(2);
+    const followUp = requests[1].messages;
+    expect(followUp[followUp.length - 1].content).toContain('the last complete one is "op-2"');
+    expect(container.textContent).toContain('the AI was asked 1 more time(s) to finish it');
+    expect(container.textContent).not.toContain('cut off at the output limit');
+    for (const id of ['op-1', 'op-2', 'op-3', 'op-4']) expect(container.textContent).toContain(`"id":"${id}"`);
+  });
+
+  it('warns when the reply is still incomplete after the follow-ups', async () => {
+    answerWith([{ success: true, data: { content: cutOff, truncated: true, usage: {} } }]);
+    await typeText('rewrite the page');
+    await send();
+
+    expect(requests).toHaveLength(3);
+    expect(container.textContent).toContain('cut off at the output limit');
+  });
+});
+
+describe('AIChatBox: an empty reply', () => {
+  it('explains why instead of failing silently, and gives the draft back', async () => {
+    aiResponse = { success: true, data: { content: '', truncated: true, finishReason: 'length', usage: { completionTokens: 16384, reasoningTokens: 16384 } } };
+    await typeText('rewrite the page');
+    await send();
+
+    expect(container.textContent).toContain('used its whole output limit without writing a reply (16384 of 16384 output tokens went to reasoning)');
+    expect(container.textContent).not.toContain('check your API key');
+    expect(textarea().value).toBe('rewrite the page');
+  });
+
+  it('reports an empty reply that was not cut off', async () => {
+    aiResponse = { success: true, data: { content: '   ', finishReason: 'stop', usage: {} } };
+    await typeText('hello');
+    await send();
+
+    expect(requests).toHaveLength(1);
+    expect(container.textContent).toContain('The AI returned an empty reply (finish reason: stop)');
+  });
+});

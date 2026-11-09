@@ -26,10 +26,14 @@ export interface AIResponse {
   error?: string;
   /** The model stopped at the output token limit, so `content` may end mid-answer */
   truncated?: boolean;
+  /** Why the model stopped, as the provider names it ("stop", "length", "content_filter", "max_tokens"...) */
+  finishReason?: string;
   usage?: {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+    /** Part of completionTokens a reasoning model spent thinking; they leave no room for the answer */
+    reasoningTokens?: number;
   };
 }
 

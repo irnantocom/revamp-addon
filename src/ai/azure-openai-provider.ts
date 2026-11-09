@@ -33,6 +33,7 @@ export class AzureOpenAIProvider implements IAIProvider {
       const { url, deployment } = this.buildRequest(model);
       let tokenParam: 'max_tokens' | 'max_completion_tokens' = 'max_tokens';
       let sendTemperature = true;
+      let tokenLimit = options?.maxTokens ?? 2000;
       const send = () =>
         fetch(url, {
           method: 'POST',
@@ -43,7 +44,7 @@ export class AzureOpenAIProvider implements IAIProvider {
           body: JSON.stringify({
             messages: toOpenAIMessages(messages),
             ...(sendTemperature && { temperature: options?.temperature ?? 0.7 }),
-            [tokenParam]: options?.maxTokens ?? 2000,
+            [tokenParam]: tokenLimit,
             stream: false,
           }),
         });
@@ -51,14 +52,17 @@ export class AzureOpenAIProvider implements IAIProvider {
       let response = await send();
 
       // Reasoning deployments reject max_tokens (want max_completion_tokens) and any
-      // temperature other than the default; adapt to whichever the model complains about.
-      for (let attempt = 0; attempt < 2 && response.status === 400; attempt++) {
+      // temperature other than the default, and each has its own output ceiling; adapt to whichever the model complains about.
+      for (let attempt = 0; attempt < 3 && response.status === 400; attempt++) {
         const body = await response.clone().json().catch(() => ({}));
         const message: string = body?.error?.message || '';
         if (tokenParam === 'max_tokens' && /max_completion_tokens/i.test(message)) {
           tokenParam = 'max_completion_tokens';
         } else if (sendTemperature && /temperature/i.test(message)) {
           sendTemperature = false;
+        } else if (Number(/supports at most (\d+)/i.exec(message)?.[1]) < tokenLimit) {
+          // "max_tokens is too large: 32768. This model supports at most 16384 completion tokens"
+          tokenLimit = Number(/supports at most (\d+)/i.exec(message)![1]);
         } else {
           break;
         }
@@ -86,10 +90,14 @@ export class AzureOpenAIProvider implements IAIProvider {
         success: true,
         content: data.choices[0]?.message?.content || '',
         ...(data.choices[0]?.finish_reason === 'length' && { truncated: true }),
+        ...(data.choices[0]?.finish_reason && { finishReason: String(data.choices[0].finish_reason) }),
         usage: {
           promptTokens: data.usage?.prompt_tokens || 0,
           completionTokens: data.usage?.completion_tokens || 0,
           totalTokens: data.usage?.total_tokens || 0,
+          ...(data.usage?.completion_tokens_details?.reasoning_tokens > 0 && {
+            reasoningTokens: data.usage.completion_tokens_details.reasoning_tokens,
+          }),
         },
       };
     } catch (error) {

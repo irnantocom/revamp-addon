@@ -51,6 +51,28 @@ describe('OpenAIProvider', () => {
     expect(bodyOf(fetchMock, 2).temperature).toBeUndefined();
   });
 
+  it('lowers the token limit to the ceiling the model reports', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(400, { error: { message: 'max_tokens is too large: 32768. This model supports at most 16384 completion tokens, whereas you provided 32768.' } }))
+      .mockResolvedValueOnce(json(200, ok));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await provider().generateCompletion(msgs, 'gpt-4o', { maxTokens: 32768 });
+
+    expect(result.success).toBe(true);
+    expect(bodyOf(fetchMock, 1)).toMatchObject({ max_tokens: 16384 });
+  });
+
+  it('reports why the model stopped and how many tokens went to reasoning', async () => {
+    const reply = { choices: [{ message: { content: '' }, finish_reason: 'length' }], usage: { completion_tokens: 8192, completion_tokens_details: { reasoning_tokens: 8192 } } };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json(200, reply)));
+
+    const result = await provider().generateCompletion(msgs, 'o3');
+
+    expect(result).toMatchObject({ success: true, content: '', truncated: true, finishReason: 'length', usage: { completionTokens: 8192, reasoningTokens: 8192 } });
+  });
+
   it('returns other 400 errors unchanged without retrying', async () => {
     const fetchMock = vi.fn().mockResolvedValue(json(400, { error: { message: 'Invalid model' } }));
     vi.stubGlobal('fetch', fetchMock);

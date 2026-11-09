@@ -180,6 +180,10 @@ describe('buildSystemPrompt with attachments', () => {
     expect(buildSystemPrompt(data, { webImages: [] })).toBe(buildSystemPrompt(data));
   });
 
+  it('asks for a compact reply when there are many operations', () => {
+    expect(buildSystemPrompt(data)).toContain('With more than 15 operations');
+  });
+
   it('teaches the model to restyle a CSS background and to read bg-image entries', () => {
     const prompt = buildSystemPrompt(data);
     expect(prompt).toContain('bg-image="…"');
