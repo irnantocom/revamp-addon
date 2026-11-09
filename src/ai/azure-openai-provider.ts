@@ -85,6 +85,7 @@ export class AzureOpenAIProvider implements IAIProvider {
       return {
         success: true,
         content: data.choices[0]?.message?.content || '',
+        ...(data.choices[0]?.finish_reason === 'length' && { truncated: true }),
         usage: {
           promptTokens: data.usage?.prompt_tokens || 0,
           completionTokens: data.usage?.completion_tokens || 0,

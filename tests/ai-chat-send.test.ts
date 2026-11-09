@@ -166,3 +166,129 @@ describe('AIChatBox: pasting', () => {
     expect(draftChips()).toHaveLength(1);
   });
 });
+
+describe('AIChatBox: replacing page content from a document', () => {
+  const operations = '```json\n{"explanation":"x","operations":[{"id":"op-1","op":"set_text","target":5,"text":"Hi","explanation":"e"}],"warnings":[]}\n```';
+  let pageMessages: any[];
+
+  const pageIndex = (extra: Record<string, unknown> = {}) => ({
+    success: true,
+    data: { mode: 'page', rootId: 1, rootTag: 'body', index: '[5] h1 "Old"', count: 1, truncated: false, url: 'https://x.test', title: 'T', ...extra },
+  });
+
+  const mockPage = (index: unknown, untouched: Array<{ id: number; label: string }> = []) => {
+    pageMessages = [];
+    (globalThis as any).chrome.tabs.sendMessage = vi.fn(async (_tabId: number, message: any) => {
+      pageMessages.push(message);
+      if (message.type === 'GET_PAGE_INDEX') return index;
+      if (message.type === 'SECTION_COVERAGE') return { success: true, data: { untouched } };
+      return { success: true, data: { summary: 'ok' } };
+    });
+  };
+
+  const hideButton = () => Array.from(container.querySelectorAll('button')).find((b) => /^Hide (it|them)$/.test(b.textContent || ''));
+
+  it('offers to hide the sections the document left out, and hides them on request', async () => {
+    mockPage(pageIndex(), [{ id: 7, label: 'Team' }, { id: 8, label: 'Blog' }]);
+    aiResponse = { success: true, data: { content: operations, usage: {} } };
+    await attach(pdf());
+    await typeText('use this');
+    await send();
+
+    expect(pageMessages.find((m) => m.type === 'SECTION_COVERAGE').payload).toEqual({ targets: [5] });
+    expect(container.textContent).toContain('2 sections keep its old content: Team, Blog');
+
+    await act(async () => {
+      hideButton()!.click();
+    });
+    await settle();
+
+    const apply = pageMessages.find((m) => m.type === 'APPLY_OPERATIONS');
+    expect(apply.payload.operations.map((o: any) => [o.op, o.target, o.visible])).toEqual([
+      ['set_visibility', 7, false],
+      ['set_visibility', 8, false],
+    ]);
+    expect(hideButton()).toBeUndefined();
+  });
+
+  it('shows nothing when no document was attached', async () => {
+    mockPage(pageIndex(), [{ id: 7, label: 'Team' }]);
+    aiResponse = { success: true, data: { content: operations, usage: {} } };
+    await typeText('change the heading');
+    await send();
+
+    expect(pageMessages.some((m) => m.type === 'SECTION_COVERAGE')).toBe(false);
+    expect(hideButton()).toBeUndefined();
+  });
+
+  it('does not check coverage when only a selected element was indexed', async () => {
+    mockPage(pageIndex({ mode: 'element' }), [{ id: 7, label: 'Team' }]);
+    aiResponse = { success: true, data: { content: operations, usage: {} } };
+    await attach(pdf());
+    await send();
+
+    expect(pageMessages.some((m) => m.type === 'SECTION_COVERAGE')).toBe(false);
+  });
+
+  it('tells the user when the page index or the reply was cut off', async () => {
+    mockPage(pageIndex({ truncated: true, count: 400 }));
+    aiResponse = { success: true, data: { content: operations, truncated: true, usage: {} } };
+    await typeText('rewrite it');
+    await send();
+
+    expect(container.textContent).toContain('only its first 400 elements were sent');
+    expect(container.textContent).toContain('cut off at the output limit');
+  });
+});
+
+describe('AIChatBox: images from a web page named in the message', () => {
+  const html = '<html><body><img src="/ship.jpg" alt="Tall ship"><img src="/deck.jpg" alt="Deck"></body></html>';
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    aiResponse = { success: true, data: { content: 'ok', usage: {} } };
+    fetchMock = vi.fn(async () => new Response(html, { headers: { 'content-type': 'text/html' } }));
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  const systemPrompt = (request: number) => requests[request].messages[0].content as string;
+
+  it('reads the page, shows what it found and lists the images in the prompt', async () => {
+    await typeText('replace the pictures with images from https://ship.test/');
+    await send();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('https://ship.test/');
+    expect(systemPrompt(0)).toContain('1. https://ship.test/ship.jpg  "Tall ship"');
+    expect(container.textContent).toContain('Read 2 images from ship.test for the AI to choose from.');
+  });
+
+  it('keeps the list for later messages without reading the page again', async () => {
+    await typeText('use images from https://ship.test/');
+    await send();
+    await typeText('now change the hero');
+    await send();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(systemPrompt(1)).toContain('https://ship.test/deck.jpg');
+  });
+
+  it('says so when the page cannot be read, and still sends the request', async () => {
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+    await typeText('use images from https://down.test/');
+    await send();
+
+    expect(requests).toHaveLength(1);
+    expect(systemPrompt(0)).not.toContain('IMAGES FROM WEB PAGES');
+    expect(container.textContent).toContain('Could not read images from https://down.test/: the site could not be reached.');
+  });
+
+  it('does not read anything when the message names no page', async () => {
+    await typeText('change the heading');
+    await send();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

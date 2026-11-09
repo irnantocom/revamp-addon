@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Inspector from './components/Inspector';
 import ElementEditor from './components/ElementEditor';
 import ExportPanel from './components/ExportPanel';
@@ -15,6 +15,11 @@ const App: React.FC = () => {
   const [selectedElement, setSelectedElement] = useState<InspectedElement | null>(null);
   // Prompt handed from another tab (e.g. notes) to the AI chat input
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
+
+  // The chat holds an unsent draft and its attachments in component state, so once opened it is
+  // hidden instead of unmounted when another tab is shown
+  const aiOpened = useRef(false);
+  if (activeTab === 'ai') aiOpened.current = true;
 
   useEffect(() => {
     // Files of tabs that were closed stay in IndexedDB until someone removes them
@@ -124,13 +129,15 @@ const App: React.FC = () => {
             onElementUpdate={setSelectedElement}
           />
         )}
-        {activeTab === 'ai' && (
-          <AIChatBox
-            selectedElement={selectedElement}
-            onClear={() => setSelectedElement(null)}
-            initialPrompt={pendingPrompt}
-            onPromptConsumed={() => setPendingPrompt(null)}
-          />
+        {aiOpened.current && (
+          <div className={activeTab === 'ai' ? 'h-full' : 'hidden'}>
+            <AIChatBox
+              selectedElement={selectedElement}
+              onClear={() => setSelectedElement(null)}
+              initialPrompt={pendingPrompt}
+              onPromptConsumed={() => setPendingPrompt(null)}
+            />
+          </div>
         )}
         {activeTab === 'demo' && (
           <DemoPanel

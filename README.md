@@ -72,6 +72,8 @@ If the page was open before you installed or reloaded the extension, the icon cl
 - Pages that re-render aggressively (React/Vue SPAs) may overwrite edits; Revamp re-applies saved changes with retries but cannot guarantee it.
 - Iframes and Shadow DOM content are not indexed or exported.
 - API keys are stored in `chrome.storage.local`, unencrypted.
+- Images from another site: name a page in the chat ("use the pictures from https://example.com") and the AI chooses from the images listed in that page's HTML. Pages that build images with JavaScript give nothing, sites with hotlink protection may show a broken image, and the AI picks without seeing the pictures.
+- Replacing page content from a document: sections the document does not cover are offered for hiding (never removed), but only for page-wide requests that carry an attached document. A page with more than 400 indexed elements is only partly visible to the AI; select a section and repeat for the rest.
 - Uploaded images can replace an `<img>` or a CSS background image, with limits: no pseudo-element backgrounds (`::before`/`::after`), no icons under 100 × 50 px, one image is capped at about 1.5 MB, and pages whose Content Security Policy blocks `data:` images will not show them (use an image URL there). Details in [ARCHITECTURE.md](ARCHITECTURE.md#images-and-backgrounds).
 
 ## License

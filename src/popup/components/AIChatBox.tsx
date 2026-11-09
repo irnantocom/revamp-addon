@@ -5,6 +5,7 @@ import { Operation, OperationsResponse } from '../../types/operations';
 import { parseOperationsResponse } from '../../utils/operation-parser';
 import { buildSystemPrompt, PageIndexData } from '../../utils/prompt-builder';
 import { resolveAttachmentSources } from '../../utils/attachment-refs';
+import { fetchWebImages, pageUrlsFrom, WebImageSource } from '../../utils/web-images';
 import { InspectedElement } from '../../types/inspector';
 import ChangePreview, { ChangeItem, PreviewStatus } from './ChangePreview';
 import AttachmentChips from './AttachmentChips';
@@ -85,6 +86,10 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
   }, [initialPrompt]);
 
   const [previewStatus, setPreviewStatus] = useState<PreviewStatus | null>(null);
+  // Image lists read from pages the user named; kept so later messages can still use them
+  const webImageCache = useRef(new Map<string, WebImageSource>());
+  // Sections a document rewrite would leave as they were, per assistant message. Not persisted: ids die with the page.
+  const [untouched, setUntouched] = useState<Record<string, Array<{ id: number; label: string }>>>({});
   const [loadingModels, setLoadingModels] = useState(false);
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [messagesLoaded, setMessagesLoaded] = useState(false);
@@ -334,15 +339,41 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
         .filter((a) => a.kind === 'image')
         .map(({ id, name }) => ({ id, name }));
       const hasAttachments = draftAttachments.length > 0 || messages.some((m) => m.attachments?.length);
+      const webImages: WebImageSource[] = [];
+      const webNotes: string[] = [];
+      for (const page of pageUrlsFrom(text)) {
+        const cached = webImageCache.current.get(page);
+        const result = cached ? { ok: true as const, source: cached } : await fetchWebImages(page);
+        if (result.ok) {
+          webImageCache.current.set(page, result.source);
+          webImages.push(result.source);
+          if (!cached) webNotes.push(`Read ${result.source.images.length} images from ${new URL(page).host} for the AI to choose from.`);
+        } else {
+          webNotes.push(`Could not read images from ${page}: ${result.error}.`);
+        }
+      }
+      // Pages named earlier in the chat stay available without reading them again
+      for (const entry of messages) {
+        if (entry.role !== 'user') continue;
+        for (const page of pageUrlsFrom(entry.content)) {
+          const cached = webImageCache.current.get(page);
+          if (cached && !webImages.includes(cached) && webImages.length < 3) webImages.push(cached);
+        }
+      }
       const built = await buildRequestMessages({
-        systemPrompt: buildSystemPrompt(pageIndexData, { hasAttachments, images }),
+        systemPrompt: buildSystemPrompt(pageIndexData, { hasAttachments, images, webImages }),
         history: messages.map((m) => ({ role: m.role, text: m.content, attachments: m.attachments })),
         draft: { text, attachments: draftAttachments },
         load: (id) => attachmentStore.get(id),
         caps,
         providerLabel: providerLabel(provider),
       });
-      requestNotes = built.notes;
+      requestNotes = [...built.notes, ...webNotes];
+      if (pageIndexData?.truncated) {
+        requestNotes.push(
+          `The page is long: only its first ${pageIndexData.count} elements were sent, so content further down was not changed. Select a section in the Inspector and repeat for the rest.`
+        );
+      }
 
       const response = await chrome.runtime.sendMessage({
         type: 'AI_REQUEST',
@@ -375,6 +406,11 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
           }
         }
         
+        if (response.data.truncated) {
+          truncationWarning +=
+            '\n\n⚠️ The reply was cut off at the output limit, so some changes may be missing. Ask again for the sections that were not changed.';
+        }
+
         // Preferred: operations on indexed elements
         const operationsResponse = parseOperationsResponse(aiContent);
 
@@ -439,6 +475,21 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
         }
         
         setMessages((prev) => [...prev, assistantMessage]);
+
+        // A document replaces the page's content: find the sections it left out so they can be hidden
+        const fromDocument = draftAttachments.some((a) => a.kind === 'document' || a.kind === 'pdf');
+        if (fromDocument && operationsResponse && operationsResponse.operations.length > 0 && pageIndexData?.mode === 'page') {
+          try {
+            const coverage = await chrome.tabs.sendMessage(tab.id, {
+              type: 'SECTION_COVERAGE',
+              payload: { targets: operationsResponse.operations.map((o) => o.target) },
+            });
+            const left = coverage?.success ? coverage.data.untouched : [];
+            if (left.length > 0) setUntouched((prev) => ({ ...prev, [assistantMessage.id]: left }));
+          } catch (coverageError) {
+            console.warn('[AI Chat] Could not check section coverage:', coverageError);
+          }
+        }
       } else {
         throw new Error(response.error || 'AI request failed');
       }
@@ -466,6 +517,7 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
     }
     if (confirm('Clear all chat messages? This will permanently delete chat history.')) {
       console.log('[AI Chat] Clearing messages and storage');
+      setUntouched({});
       
       // Clear state first
       setMessages([]);
@@ -625,6 +677,36 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
       });
     } catch (error) {
       console.error('[AI Chat] Error applying changes:', error);
+      alert(`Error: ${error}`);
+    }
+  };
+
+  const hideUntouched = async (messageId: string) => {
+    const sections = untouched[messageId] ?? [];
+    if (sections.length === 0) return;
+
+    try {
+      await withActiveTab(async (tabId) => {
+        const operations: Operation[] = sections.map((s) => ({
+          id: `hide-${s.id}`,
+          op: 'set_visibility',
+          target: s.id,
+          visible: false,
+          explanation: `Hide ${s.label}`,
+        }));
+        const response = await chrome.tabs.sendMessage(tabId, { type: 'APPLY_OPERATIONS', payload: { operations } });
+        if (response?.success) {
+          setUntouched((prev) => {
+            const next = { ...prev };
+            delete next[messageId];
+            return next;
+          });
+        } else {
+          alert(`Failed to hide sections: ${response?.error}`);
+        }
+      });
+    } catch (error) {
+      console.error('[AI Chat] Error hiding sections:', error);
       alert(`Error: ${error}`);
     }
   };
@@ -917,6 +999,21 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
                         <li key={i}>{w}</li>
                       ))}
                     </ul>
+                  )}
+                  {(untouched[message.id]?.length ?? 0) > 0 && (
+                    <div className="mt-2 bg-yellow-50 border border-yellow-200 rounded p-2 text-[11px] text-yellow-800">
+                      <div>
+                        {untouched[message.id].length === 1 ? '1 section keeps' : `${untouched[message.id].length} sections keep`} its old content:{' '}
+                        {untouched[message.id].slice(0, 4).map((s) => s.label).join(', ')}
+                        {untouched[message.id].length > 4 && `, and ${untouched[message.id].length - 4} more`}
+                      </div>
+                      <button
+                        onClick={() => hideUntouched(message.id)}
+                        className="mt-1 underline hover:text-yellow-900"
+                      >
+                        {untouched[message.id].length === 1 ? 'Hide it' : 'Hide them'}
+                      </button>
+                    </div>
                   )}
                   <button
                     onClick={undoLast}

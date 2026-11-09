@@ -175,6 +175,7 @@ export class GeminiProvider implements IAIProvider {
       return {
         success: true,
         content: text,
+        ...(candidate.finishReason === 'MAX_TOKENS' && { truncated: true }),
         usage: {
           promptTokens: data.usageMetadata?.promptTokenCount || 0,
           completionTokens: data.usageMetadata?.candidatesTokenCount || 0,

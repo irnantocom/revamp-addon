@@ -220,6 +220,10 @@ class RevampInspector {
           sendResponse(this.getPageIndex(message.selector));
           break;
 
+        case 'SECTION_COVERAGE':
+          sendResponse({ success: true, data: { untouched: pageIndex.untouchedSections(message.payload?.targets || []) } });
+          break;
+
         case 'APPLY_OPERATIONS':
           sendResponse(this.applyOperations(message.payload?.operations || []));
           break;

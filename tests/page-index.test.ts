@@ -48,3 +48,43 @@ describe('PageIndex background images', () => {
     expect(build()).not.toContain('bg-image');
   });
 });
+
+describe('PageIndex.untouchedSections', () => {
+  const sections = () => Array.from(document.querySelectorAll('section'));
+
+  beforeEach(() => {
+    document.body.innerHTML = `
+      <header><h1>Logo</h1></header>
+      <section id="a"><h2>A</h2><p id="a-p">one</p></section>
+      <section id="b"><h2>B</h2><p>two</p></section>
+      <section id="c"><h2>C</h2><p>three</p></section>
+      <footer><p>Legal</p></footer>`;
+  });
+
+  it('reports sections that hold none of the targets', () => {
+    const target = index.idOf(document.getElementById('a-p')!);
+
+    expect(index.untouchedSections([target]).map((s) => s.label)).toEqual(['B', 'C']);
+  });
+
+  it('counts a target that is the section itself', () => {
+    const [a, b] = sections().map((s) => index.idOf(s));
+
+    expect(index.untouchedSections([a, b]).map((s) => s.label)).toEqual(['C']);
+  });
+
+  it('never offers the header, navigation or footer', () => {
+    const all = sections().map((s) => index.idOf(s));
+
+    expect(index.untouchedSections(all)).toEqual([]);
+    expect(index.untouchedSections([]).map((s) => s.tag)).toEqual(['section', 'section', 'section']);
+  });
+
+  it('skips sections that are already hidden and ignores unknown ids', () => {
+    const [a] = sections().map((s) => index.idOf(s));
+    index.markHidden(document.getElementById('b')!, true);
+    (document.getElementById('b') as HTMLElement).style.display = 'none';
+
+    expect(index.untouchedSections([a, 9999]).map((s) => s.label)).toEqual(['C']);
+  });
+});

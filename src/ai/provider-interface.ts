@@ -24,6 +24,8 @@ export interface AIResponse {
   success: boolean;
   content?: string;
   error?: string;
+  /** The model stopped at the output token limit, so `content` may end mid-answer */
+  truncated?: boolean;
   usage?: {
     promptTokens: number;
     completionTokens: number;

@@ -20,6 +20,9 @@ const BG_MIN_WIDTH = 100;
 const BG_MIN_HEIGHT = 50;
 const BG_PREVIEW = 300;
 
+/** Page furniture that a content rewrite should leave alone, so it is never offered for hiding */
+const FURNITURE_TAGS = new Set(['header', 'nav', 'footer']);
+
 const MAX_ENTRIES = 400;
 const TEXT_PREVIEW = 80;
 /** Editable text is shown in full up to this length, so the AI can rewrite or translate all of it */
@@ -144,6 +147,19 @@ export class PageIndex {
         previousId: pos > 0 ? this.idOf(siblings[pos - 1]) : undefined,
         nextId: pos !== -1 && pos < siblings.length - 1 ? this.idOf(siblings[pos + 1]) : undefined,
       };
+    });
+  }
+
+  /**
+   * Sections that no target element sits in: what a page-wide rewrite from a document would leave
+   * as it was. Hidden sections and the header, navigation and footer are not reported.
+   */
+  untouchedSections(targetIds: number[]): SectionInfo[] {
+    const targets = targetIds.map((id) => this.resolve(id)).filter((el): el is Element => el !== null);
+    return this.listSections().filter((section) => {
+      if (section.hidden || FURNITURE_TAGS.has(section.tag)) return false;
+      const el = this.resolve(section.id);
+      return el !== null && !targets.some((target) => el.contains(target));
     });
   }
 
