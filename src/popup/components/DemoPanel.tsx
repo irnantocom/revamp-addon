@@ -15,6 +15,7 @@ interface DemoState {
   parkedCount: number;
   sections: SectionInfo[];
   annotations: AnnotationInfo[];
+  saveError?: string;
 }
 
 interface Props {
@@ -326,6 +327,11 @@ const DemoPanel: React.FC<Props> = ({ onAskAI }) => {
             {state.enabled ? 'On' : 'Off'}
           </label>
         </div>
+        {state.saveError && (
+          <p role="alert" className="text-xs text-red-800 bg-red-50 border border-red-200 rounded p-2">
+            {state.saveError}
+          </p>
+        )}
         {!state.enabled && (
           <p className="text-xs text-yellow-800 bg-yellow-50 border border-yellow-200 rounded p-2">
             The original page is showing. {state.parkedCount} saved change(s) are kept and return when you switch demo mode on.

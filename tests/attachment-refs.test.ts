@@ -98,6 +98,40 @@ describe('resolveAttachmentSources', () => {
     expect(errors[0].error).toContain('not an image');
   });
 
+  describe('shrinking', () => {
+    it('uses the shrunk image, so a large upload that fits after shrinking is accepted', async () => {
+      const big = image('big', 'A'.repeat(MAX_IMAGE_DATA_URL_CHARS));
+      const shrink = async () => 'data:image/webp;base64,SMALL';
+
+      const { operations, errors } = await resolveAttachmentSources([replace('a', 'attachment:big')], store(big), shrink);
+
+      expect(errors).toEqual([]);
+      expect(operations[0]).toMatchObject({ src: 'data:image/webp;base64,SMALL' });
+    });
+
+    it('keeps the original when shrinking fails', async () => {
+      const shrink = async () => {
+        throw new Error('cannot decode');
+      };
+
+      const { operations } = await resolveAttachmentSources([replace('a', 'attachment:img1')], store(image('img1')), shrink);
+
+      expect(operations[0]).toMatchObject({ src: 'data:image/png;base64,QUJD' });
+    });
+
+    it('still refuses an image that is too large after shrinking', async () => {
+      const shrink = async (url: string) => url;
+      const { operations, errors } = await resolveAttachmentSources(
+        [replace('a', 'attachment:big')],
+        store(image('big', 'A'.repeat(MAX_IMAGE_DATA_URL_CHARS))),
+        shrink
+      );
+
+      expect(operations).toEqual([]);
+      expect(errors[0].error).toContain('too large');
+    });
+  });
+
   it('refuses an image too large to keep in the demo', async () => {
     const big = image('big', 'A'.repeat(MAX_IMAGE_DATA_URL_CHARS));
 

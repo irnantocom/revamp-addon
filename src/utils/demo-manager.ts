@@ -48,6 +48,8 @@ export class DemoManager {
   private saveTimer: number | undefined;
   private retryTimer: number | undefined;
   private retryRound = 0;
+  /** Why the last save failed; the panel shows it, since a demo that is not saved is lost on reload */
+  private saveError: string | undefined;
 
   constructor(private history: ChangeManager, private index: PageIndex) {
     this.history.onChange(() => this.scheduleSave());
@@ -104,6 +106,7 @@ export class DemoManager {
       items,
       parkedCount: this.parked.length,
       annotations: this.listAnnotations(),
+      saveError: this.saveError,
     };
   }
 
@@ -384,8 +387,14 @@ export class DemoManager {
       } else {
         await chrome.storage.session.set({ [key]: config });
       }
+      this.saveError = undefined;
     } catch (error) {
       console.error('[Demo] Failed to save demo:', error);
+      const reason = error instanceof Error ? error.message : String(error);
+      // Uploaded images are stored as data URLs, so a handful of them can exhaust the 10 MB quota
+      this.saveError = /quota/i.test(reason)
+        ? 'The demo is too large for browser storage, so it is not saved and a reload will lose it. Use smaller images or image URLs, or export the demo.'
+        : `The demo could not be saved, so a reload will lose it: ${reason}`;
     }
   }
 }

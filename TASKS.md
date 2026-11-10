@@ -2,7 +2,7 @@
 
 Status of delivered work and the open backlog. Product intent is in [PRD.md](PRD.md). Update this file when a task starts, finishes or is dropped.
 
-Last verified: `npm test` 382 passed (30 files), `npm run type-check` clean.
+Last verified: `npm test` 388 passed (31 files), `npm run type-check` clean.
 
 ## Delivered
 
@@ -23,6 +23,7 @@ Last verified: `npm test` 382 passed (30 files), `npm run type-check` clean.
 | Images on the page | An uploaded image replaces an `<img>` or a CSS `background-image` (`attachment:<id>` becomes a data URL in the panel, 2,000,000-character cap); `bg-image` entries in the index; pictures from a web page named in the chat, with a WordPress media-library fallback only when that page has fewer pictures than the edited page has places; one picture at several sizes is listed once; each picture is used at most once | `attachment-refs.ts`, `web-images.ts`. Limits in ARCHITECTURE.md "Images and backgrounds". Unit-tested; manual checks open in Backlog. The replaced images no longer repeat (checked in Chrome) |
 | Layout safety | `set_html` that would strip a section's classes and styles is refused (`layoutRisk`); the panel asks the page (`CHECK_OPERATIONS`) and has the model redo refused operations once; operations on a duplicate (`in`), so the model can reuse the page's own sections and move them; tables as inline-styled HTML | Verified in Chrome on the Christmas Cruise document ("starting to look good"); undo, reload and export of copies still to check |
 | Long and empty replies | Output-limit detection for all four providers; one retry with a bigger budget, then up to two continuations merged by id; an empty reply explains itself (finish reason, reasoning tokens) | `reply-continuation.ts`. Unit-tested; the cost of the extra requests is still to be observed |
+| Demo lost on reload | A demo too large for `chrome.storage.session` (10 MB) was not saved, silently, so a reload lost every change while Demo mode still showed On. The panel now shows why (`saveError` in `DEMO_STATE`), and an applied upload is re-encoded to WebP (1600 px at most, `image-shrink.ts`) so more pictures fit | Reproduced in Chrome 150 with nine 1.9 MB images; `tests/demo-reload.test.ts`, `tests/attachment-refs.test.ts`. A demo of many large pictures can still pass 10 MB: the notice says so. Whether this is what you hit on your page is unconfirmed |
 | Azure and OpenAI fixes | `temperature` and `max_completion_tokens` adapt to reasoning models; the token limit drops to the ceiling the API reports; Azure endpoints keep a gateway base path (API Management) and show the gateway's error message | Unit-tested (`azure-provider.test.ts`, `openai-provider.test.ts`); chat replies came back from the Azure deployment in later runs (the APIM endpoint and each deployment were not tested one by one) |
 
 ## Backlog
@@ -49,7 +50,7 @@ Priority: **P0** blocks release, **P1** next, **P2** later.
 - [ ] **P2** `set_text` replaces everything inside an element, including icons and nested spans (`textContent`). A text-preserving variant (write the text into the first text node and keep child elements) would protect icon buttons and labels; not built because no breakage was seen yet.
 - [ ] **P2** Reasoning models (gpt-5 / o-series style deployments) spend output tokens on thinking. If empty or cut-off replies keep happening on long pages, add a per-provider setting for reasoning effort (`reasoning_effort` on OpenAI/Azure; check that the deployment accepts it first, and drop it on a 400 like `temperature`). Not built: the parameter is unverified for the deployments in use.
 - [ ] **P2** Pseudo-element backgrounds (`::before`/`::after`): new operation with a property whitelist that tags the element with a `data-revamp-*` attribute and injects a `<style>` rule; must be undoable, persisted in the demo, kept in the export (attribute stripped). See "Images and backgrounds" in ARCHITECTURE.md.
-- [ ] **P2** Show the new image in the preview before Apply, and downscale an oversized upload instead of refusing it.
+- [ ] **P2** Show the new image in the preview before Apply. (Large uploads are now re-encoded to WebP, 1600 px at most, before they are applied; the 2,000,000-character cap is checked after that.)
 - [ ] **P2** Native Gemini video input instead of sampled frames; OCR or text extraction for providers and models without vision.
 - [ ] **P1** Remove attachment content that is no longer used: a file removed from a draft stays in IndexedDB until Clear chat, and Clear chat is disabled when the chat is empty. Add `delete` to `AttachmentStore` and call it from `remove`.
 - [ ] **P2** Attachment polish from the review: HEIC/AVIF photos are reported as undecodable videos (check the `ftyp` brand in `file-sniff.ts`); DOCX tracked changes and field codes merge into the text; strip bidi/control characters from file names before they enter the prompt; wrap long names in error chips and notes; show a note only once instead of under every reply; await the IndexedDB transaction's `oncomplete` in `put`; catch `load()` errors per file; tell the user when earlier files go to a newly selected provider.

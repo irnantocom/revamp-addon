@@ -5,6 +5,7 @@ import { Operation, OperationsResponse } from '../../types/operations';
 import { parseOperationsResponse } from '../../utils/operation-parser';
 import { buildSystemPrompt, PageIndexData } from '../../utils/prompt-builder';
 import { resolveAttachmentSources } from '../../utils/attachment-refs';
+import { shrinkDataUrl } from '../../utils/image-shrink';
 import { countImageSlots, gatherWebImages, keywordsFrom, pageUrlsFrom, WebImageSource } from '../../utils/web-images';
 import { Ask, completeReply, describeEmptyReply, ReplyInfo } from '../../utils/reply-continuation';
 import { repairOperations } from '../../utils/operation-repair';
@@ -685,7 +686,8 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
         // Uploaded images travel as "attachment:<id>"; the page needs the actual data URL
         const { operations, errors: unresolved } = await resolveAttachmentSources(
           (message.operationsResponse?.operations || []).filter((o) => ids.includes(o.id)),
-          (id) => attachmentStore.get(id)
+          (id) => attachmentStore.get(id),
+          shrinkDataUrl
         );
         const legacyChanges = (message.revampResponse?.changes || []).filter((c) => ids.includes(c.id));
         if (unresolved.length > 0) {
