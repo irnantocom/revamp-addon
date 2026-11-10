@@ -8,14 +8,14 @@ Changes are temporary and local to your browser. The real website is never modif
 
 | Area | What it does |
 |------|--------------|
-| **Inspector** | Hover to highlight, click to select an element. Works inside a floating, draggable, resizable panel. |
-| **Editor** | Edit text, attributes and CSS of the selected element, with undo. |
+| **Editor** | Start the inspector (hover to highlight, click to select an element), then edit its text, attributes and CSS, with undo. Works inside a floating, draggable, resizable panel. |
 | **AI Chat** | Ask for changes ("make the hero heading shorter, hide the second section"). The AI returns structured operations that you preview, tick or untick, and apply. Page-level or element-level scope. Attach images, PDFs, videos (sent as frames) or documents (TXT, MD, CSV, JSON, HTML, DOCX) as context with the paperclip, drag and drop or paste. |
 | **Demo mode** | Applied changes are saved per page and re-applied after reload. Section list (hide, show, move up/down, duplicate, remove), per-change revert, reset, on/off switch. |
 | **Notes** | Pin notes to elements. "Ask AI to apply open notes" turns them into an AI request. |
 | **Versions and sharing** | Save named versions, compare them, share a demo as a JSON file or a text code (no server). |
 | **Presentation** | Hide the extension UI, take viewport or full-page screenshots. |
 | **Handoff package** | ZIP with a change list (Markdown and HTML), before/after screenshots and the demo JSON. |
+| **Tokens** | Token usage of every AI request (input, output, reasoning, total) per model and per request, for today, the last 7 days or all kept history. |
 | **Static export** | ZIP with `index.html`, one `css/styles.css`, downloaded images and fonts, URLs rewritten to local paths. Tracking scripts, chat widgets and cookie banners are removed. |
 
 AI providers with a working adapter: **OpenAI**, **Azure OpenAI**, **Anthropic Claude**, **Google Gemini**. Settings also lists Perplexity, Mistral, Cohere, Groq and OpenRouter, but those return "not yet implemented".
@@ -42,7 +42,7 @@ If the page was open before you installed or reloaded the extension, the icon cl
 
 ## Basic workflow
 
-1. **Inspector**: start the inspector and click an element (optional; without a selection the AI works on the whole page).
+1. **Inspector** (in the Editor or AI Chat tab): start it and click an element (optional; without a selection the AI works on the whole page).
 2. **AI Chat**: describe the change, review the previewed operations (the eye icon highlights the target), apply the selected ones.
 3. **Demo**: check the change list, reorder or hide sections, add notes, save a version.
 4. **Export**: pick **Export** for a static site ZIP, or **Demo → Handoff** for the change package.
@@ -54,7 +54,7 @@ If the page was open before you installed or reloaded the extension, the icon cl
 | `npm run build` | Type-check, build content script and service worker, build popup. Does **not** copy `manifest.json` or icons; use `./build.sh` for a loadable `dist/`. |
 | `npm run dev` | Watch build of the popup bundle (reload the extension and the tab after changes). |
 | `npm run type-check` | `tsc --noEmit`. |
-| `npm test` | Vitest with jsdom (243 tests). |
+| `npm test` | Vitest with jsdom. |
 
 ## Documentation
 

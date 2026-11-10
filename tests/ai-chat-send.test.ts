@@ -85,7 +85,7 @@ beforeEach(async () => {
   document.body.appendChild(container);
   root = createRoot(container);
   await act(async () => {
-    root.render(React.createElement(AIChatBox, {}));
+    root.render(React.createElement(AIChatBox, { inspector: { active: false, toggle: async () => {} } }));
   });
   await settle();
 });

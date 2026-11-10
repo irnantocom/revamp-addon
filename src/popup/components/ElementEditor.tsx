@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { InspectedElement } from '../../types/inspector';
+import { InspectorControl } from '../use-inspector';
 
 interface Props {
   element: InspectedElement | null;
   onClear: () => void;
   /** Called with fresh element info after an edit, so the attribute list matches the page */
   onElementUpdate: (element: InspectedElement) => void;
+  inspector: InspectorControl;
 }
 
 const EMPTY_STYLE = {
@@ -24,7 +26,7 @@ function childTags(innerHTML: string): string[] {
   return Array.from(template.content.querySelectorAll('*')).map((el) => el.tagName.toLowerCase());
 }
 
-const ElementEditor: React.FC<Props> = ({ element, onClear, onElementUpdate }) => {
+const ElementEditor: React.FC<Props> = ({ element, onClear, onElementUpdate, inspector }) => {
   const [textValue, setTextValue] = useState('');
   const [selectedAttribute, setSelectedAttribute] = useState('');
   const [customAttributeName, setCustomAttributeName] = useState('');
@@ -186,12 +188,32 @@ const ElementEditor: React.FC<Props> = ({ element, onClear, onElementUpdate }) =
     }
   };
 
+  const header = (
+    <div className="flex items-center justify-between">
+      <h3 className="text-sm font-semibold text-gray-900">Element Editor</h3>
+      <button
+        onClick={inspector.toggle}
+        className={`text-xs px-3 py-1 rounded ${
+          inspector.active
+            ? 'bg-red-100 text-red-700 border border-red-300'
+            : 'bg-blue-100 text-blue-700 border border-blue-300'
+        }`}
+        title="Toggle Inspector"
+      >
+        {inspector.active ? '⊗ Stop' : '⊕ Inspector'}
+      </button>
+    </div>
+  );
+
   if (!element) {
     return (
-      <div className="p-4">
+      <div className="p-4 space-y-4">
+        {header}
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-center">
           <p className="text-sm text-yellow-800">
-            No element selected. Go to the Inspector tab to select an element.
+            {inspector.active
+              ? 'Hover over the page to highlight elements, then click one to select it.'
+              : 'No element selected. Click Inspector, then click an element on the page.'}
           </p>
         </div>
       </div>
@@ -200,6 +222,8 @@ const ElementEditor: React.FC<Props> = ({ element, onClear, onElementUpdate }) =
 
   return (
     <div className="p-4 space-y-4">
+      {header}
+
       {/* Element Info */}
       <div className="bg-green-50 border border-green-200 rounded p-2 text-xs">
         <div className="flex items-center justify-between">

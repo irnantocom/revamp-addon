@@ -10,6 +10,7 @@ import { AzureOpenAIProvider } from '../ai/azure-openai-provider';
 import type { AIRequest } from '../ai/provider-interface';
 import { assertPayloadSize } from './payload-guard';
 import { purgeTabState } from './tab-state';
+import { recordTokenUsage, usageRecord } from '../utils/token-usage';
 
 interface Message {
   type: string;
@@ -115,7 +116,7 @@ chrome.runtime.onMessage.addListener(
         return true;
 
       case 'AI_REQUEST':
-        handleAIRequest(message.payload, sendResponse);
+        handleAIRequest(message.payload, sender.tab?.url, sendResponse);
         return true;
 
       case 'FETCH_MODELS':
@@ -164,6 +165,7 @@ async function handleUpdateSettings(
 // Handle AI requests (to be expanded in Phase 2)
 async function handleAIRequest(
   payload: AIRequest,
+  pageUrl: string | undefined,
   sendResponse: (response: MessageResponse) => void
 ) {
   try {
@@ -234,6 +236,10 @@ async function handleAIRequest(
         stream: payload.stream,
       }
     );
+
+    // Failed requests can be billed too, so record whatever usage came back
+    const usage = usageRecord(payload.provider, payload.model, response.usage, pageUrl);
+    if (usage) void recordTokenUsage(chrome.storage.local, usage);
 
     if (response.success) {
       sendResponse({

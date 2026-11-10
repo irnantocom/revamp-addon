@@ -18,27 +18,8 @@ import { chatKey, getTabId } from '../../utils/tab-scope';
 import { acceptedFileTypes, getCapabilities, providerLabel } from '../../ai/capabilities';
 import { buildRequestMessages } from '../../utils/chat-content';
 import { AttachmentMeta } from '../../types/attachments';
-
-// Helper to ensure content script is ready
-const ensureContentScript = async (tabId: number): Promise<boolean> => {
-  const maxRetries = 10;
-  const retryDelay = 200;
-
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      await chrome.tabs.sendMessage(tabId, { type: 'PING' });
-      console.log(`[AI Chat] Content script ready (attempt ${i + 1})`);
-      return true;
-    } catch (error) {
-      if (i < maxRetries - 1) {
-        await new Promise(resolve => setTimeout(resolve, retryDelay));
-      }
-    }
-  }
-
-  console.error('[AI Chat] Content script failed to load after retries');
-  return false;
-};
+import { ensureContentScript } from '../tab-messaging';
+import { InspectorControl } from '../use-inspector';
 
 /** The model answered, but with nothing to parse: not an API-key problem, and worth retrying */
 class EmptyReplyError extends Error {}
@@ -67,6 +48,7 @@ interface Message {
 }
 
 interface Props {
+  inspector: InspectorControl;
   selectedElement?: InspectedElement | null;
   onClear?: () => void;
   /** Text to put in the input box, e.g. coming from the Demo tab */
@@ -74,13 +56,12 @@ interface Props {
   onPromptConsumed?: () => void;
 }
 
-const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, onPromptConsumed }) => {
+const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initialPrompt, onPromptConsumed }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [provider, setProvider] = useState('');
   const [model, setModel] = useState('');
-  const [inspectorActive, setInspectorActive] = useState(false);
   const [availableProviders, setAvailableProviders] = useState<string[]>([]);
   const [providerModels, setProviderModels] = useState<Record<string, string[]>>({});
   const [apiKeysLoaded, setApiKeysLoaded] = useState(false);
@@ -268,21 +249,6 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
 
     fetchModelsForProvider();
   }, [provider, apiKeys]);
-
-  // Listen for inspector state changes from content script
-  useEffect(() => {
-    const handleMessage = (message: any) => {
-      if (message.type === 'INSPECTOR_STATE_CHANGED') {
-        setInspectorActive(message.isActive);
-      }
-    };
-
-    chrome.runtime.onMessage.addListener(handleMessage);
-    
-    return () => {
-      chrome.runtime.onMessage.removeListener(handleMessage);
-    };
-  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -588,31 +554,6 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
     }
   };
 
-  const toggleInspector = async () => {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab.id) return;
-
-      // Ensure content script is loaded
-      const ready = await ensureContentScript(tab.id);
-      if (!ready) {
-        alert('Failed to load inspector. Please refresh the page and try again.');
-        return;
-      }
-
-      if (inspectorActive) {
-        await chrome.tabs.sendMessage(tab.id, { type: 'STOP_INSPECTOR' });
-        setInspectorActive(false);
-      } else {
-        await chrome.tabs.sendMessage(tab.id, { type: 'START_INSPECTOR' });
-        setInspectorActive(true);
-      }
-    } catch (error) {
-      console.error('[AI Chat] Failed to toggle inspector:', error);
-      alert('Failed to start inspector: ' + error);
-    }
-  };
-
   // Run an action against the active tab, making sure the content script is up
   const withActiveTab = async <T,>(fn: (tabId: number) => Promise<T>): Promise<T | undefined> => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -891,15 +832,15 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
           <h3 className="text-sm font-semibold text-gray-900">AI Assistant</h3>
           <div className="flex gap-2">
             <button
-              onClick={toggleInspector}
+              onClick={inspector.toggle}
               className={`text-xs px-3 py-1 rounded ${
-                inspectorActive
+                inspector.active
                   ? 'bg-red-100 text-red-700 border border-red-300'
                   : 'bg-blue-100 text-blue-700 border border-blue-300'
               }`}
               title="Toggle Inspector"
             >
-              {inspectorActive ? '⊗ Stop' : '⊕ Inspector'}
+              {inspector.active ? '⊗ Stop' : '⊕ Inspector'}
             </button>
             <button
               onClick={clearChat}

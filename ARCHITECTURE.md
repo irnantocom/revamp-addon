@@ -7,8 +7,8 @@ Three execution contexts, connected by Chrome message passing:
 ```
 ┌──────────────────────────────┐   iframe (extension origin)
 │ Panel UI  (src/popup, React) │◄──────────────────────────────┐
-│ tabs: Inspector Editor AI    │                               │ injected by
-│       Demo Export Settings   │                               │ content script
+│ tabs: Editor AI Demo Export  │                               │ injected by
+│       Settings Tokens        │                               │ content script
 └───────┬──────────────┬───────┘                               │
         │ chrome.tabs  │ chrome.runtime                        │
         │ .sendMessage │ .sendMessage                          │
@@ -18,6 +18,7 @@ Three execution contexts, connected by Chrome message passing:
 │ (page context)   │  │ - toggle/inject panel     │            │
 │ - inspector      │  │ - settings (storage)      │            │
 │ - page index     │  │ - AI requests + providers │            │
+│                  │  │ - token usage log         │            │
 │ - operations     │  │ - model list, key check   │            │
 │ - demo manager   │  │ - captureVisibleTab       │            │
 │ - annotations    │  └───────────┬───────────────┘            │
@@ -36,10 +37,11 @@ The panel talks to the page through `sendToTab` ([src/popup/tab-messaging.ts](sr
 | Path | Responsibility |
 |------|----------------|
 | [public/manifest.json](public/manifest.json) | MV3 manifest: `activeTab`, `storage`, `scripting`, host `<all_urls>`, CSP `script-src 'self'`. |
-| [src/background/service-worker.ts](src/background/service-worker.ts) | Icon click handling, settings, AI routing, model fetch, key validation, tab screenshots. |
+| [src/background/service-worker.ts](src/background/service-worker.ts) | Icon click handling, settings, AI routing, token usage recording, model fetch, key validation, tab screenshots. |
 | [src/ai/](src/ai) | `IAIProvider` interface plus OpenAI, Azure OpenAI, Claude, Gemini adapters. |
 | [src/content/content-script.ts](src/content/content-script.ts) | Message router and orchestration: inspector, floating panel, preview, demo, notes, export snapshot. |
-| [src/popup/](src/popup) | React panel. `App.tsx` owns tab state and the selected element; `components/` has one component per tab plus `ChangePreview` and `VersionsPanel`. |
+| [src/popup/](src/popup) | React panel. `App.tsx` owns tab state and the selected element; `components/` has one component per tab plus `ChangePreview` and `VersionsPanel`. The element picker toggle sits in the Editor and AI Chat tabs (`use-inspector.ts`); there is no Inspector tab. |
+| [src/utils/token-usage.ts](src/utils/token-usage.ts) | Token usage records: built from a provider reply, validated when read, capped, summed per model for the Tokens tab. |
 | [src/utils/page-index.ts](src/utils/page-index.ts) | Numeric Revamp ids, text index for the AI, section tree. |
 | [src/utils/operation-parser.ts](src/utils/operation-parser.ts) | Parse and validate AI JSON into `Operation[]`. |
 | [src/utils/operation-executor.ts](src/utils/operation-executor.ts) | Apply one operation and return its inverse; HTML sanitizer. |
@@ -204,6 +206,7 @@ Chat and demo are per browser tab. The panel and the content script learn their 
 |-----|------|
 | `settings` | `{ aiProvider, apiKeys, azure: { endpoint, apiVersion, deployment }, ... }` |
 | `demoVersions:<origin><pathname>` | `DemoVersion[]` |
+| `tokenUsage` | `TokenUsageRecord[]`: one per AI reply that reported usage (time, provider, model, input/output/reasoning/total tokens, page host and path), newest last, at most 1,000. Written by the service worker after every `AI_REQUEST`, including continuation and repair calls and failed requests that still reported usage; the Tokens tab reads it and follows `chrome.storage.onChanged`. Counts are the provider's own; no cost is computed |
 | `localStorage["revamp-panel-position"]` (host page) | floating panel x/y |
 | IndexedDB `revamp-attachments-<tabId>` | file content (`StoredAttachment`) for chat attachments of that tab |
 
@@ -222,7 +225,7 @@ Chat and demo are per browser tab. The panel and the content script learn their 
 | Notes | `ANNOTATION_ADD`, `ANNOTATION_UPDATE`, `ANNOTATION_DELETE`, `ANNOTATION_VISIBLE`, `ANNOTATION_NOTES_CONTEXT` |
 | Presentation and output | `PRESENTATION_SET`, `SCREENSHOT`, `HANDOFF_CAPTURE`, `EXPORT_SNAPSHOT`, `GET_PAGE_HTML`, `GET_SUBTREE_SNAPSHOT` |
 
-**Content script → panel:** `ELEMENT_SELECTED` (broadcast with `chrome.runtime.sendMessage`).
+**Content script → panel:** `ELEMENT_SELECTED`, `INSPECTOR_STATE_CHANGED` (`isActive`; keeps the inspector toggles in Editor and AI Chat in step) (broadcast with `chrome.runtime.sendMessage`).
 
 Responses use `{ success, data?, error? }`.
 

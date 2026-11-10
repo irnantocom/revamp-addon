@@ -1,20 +1,31 @@
 import React, { useState, useEffect, useRef } from 'react';
-import Inspector from './components/Inspector';
 import ElementEditor from './components/ElementEditor';
 import ExportPanel from './components/ExportPanel';
 import AIChatBox from './components/AIChatBox';
 import Settings from './components/Settings';
 import DemoPanel from './components/DemoPanel';
+import TokenUsagePanel from './components/TokenUsagePanel';
 import { InspectedElement } from '../types/inspector';
 import { purgeOrphanAttachmentDatabases } from '../utils/attachment-store';
+import { useInspector } from './use-inspector';
 
-type Tab = 'inspector' | 'editor' | 'ai' | 'demo' | 'export' | 'settings';
+type Tab = 'editor' | 'ai' | 'demo' | 'export' | 'settings' | 'tokens';
+
+const TABS: Array<[Tab, string]> = [
+  ['editor', 'Editor'],
+  ['ai', 'AI Chat'],
+  ['demo', 'Demo'],
+  ['export', 'Export'],
+  ['settings', 'Settings'],
+  ['tokens', 'Tokens'],
+];
 
 const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<Tab>('inspector');
+  const [activeTab, setActiveTab] = useState<Tab>('editor');
   const [selectedElement, setSelectedElement] = useState<InspectedElement | null>(null);
   // Prompt handed from another tab (e.g. notes) to the AI chat input
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
+  const inspector = useInspector();
 
   // The chat holds an unsent draft and its attachments in component state, so once opened it is
   // hidden instead of unmounted when another tab is shown
@@ -56,82 +67,35 @@ const App: React.FC = () => {
 
       {/* Tabs */}
       <nav className="flex border-b border-gray-200 bg-white overflow-x-auto">
-        <button
-          onClick={() => setActiveTab('inspector')}
-          className={`flex-1 py-3 px-2 text-xs font-medium whitespace-nowrap ${
-            activeTab === 'inspector'
-              ? 'border-b-2 border-blue-600 text-blue-600'
-              : 'text-gray-600 hover:text-gray-900'
-          }`}
-        >
-          Inspector
-        </button>
-        <button
-          onClick={() => setActiveTab('editor')}
-          className={`flex-1 py-3 px-2 text-xs font-medium whitespace-nowrap ${
-            activeTab === 'editor'
-              ? 'border-b-2 border-blue-600 text-blue-600'
-              : 'text-gray-600 hover:text-gray-900'
-          }`}
-          disabled={!selectedElement}
-        >
-          Editor
-        </button>
-        <button
-          onClick={() => setActiveTab('ai')}
-          className={`flex-1 py-3 px-2 text-xs font-medium whitespace-nowrap ${
-            activeTab === 'ai'
-              ? 'border-b-2 border-blue-600 text-blue-600'
-              : 'text-gray-600 hover:text-gray-900'
-          }`}
-        >
-          AI Chat
-        </button>
-        <button
-          onClick={() => setActiveTab('demo')}
-          className={`flex-1 py-3 px-2 text-xs font-medium whitespace-nowrap ${
-            activeTab === 'demo'
-              ? 'border-b-2 border-blue-600 text-blue-600'
-              : 'text-gray-600 hover:text-gray-900'
-          }`}
-        >
-          Demo
-        </button>
-        <button
-          onClick={() => setActiveTab('export')}
-          className={`flex-1 py-3 px-2 text-xs font-medium whitespace-nowrap ${
-            activeTab === 'export'
-              ? 'border-b-2 border-blue-600 text-blue-600'
-              : 'text-gray-600 hover:text-gray-900'
-          }`}
-        >
-          Export
-        </button>
-        <button
-          onClick={() => setActiveTab('settings')}
-          className={`flex-1 py-3 px-2 text-xs font-medium whitespace-nowrap ${
-            activeTab === 'settings'
-              ? 'border-b-2 border-blue-600 text-blue-600'
-              : 'text-gray-600 hover:text-gray-900'
-          }`}
-        >
-          Settings
-        </button>
+        {TABS.map(([tab, label]) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`flex-1 py-3 px-2 text-xs font-medium whitespace-nowrap ${
+              activeTab === tab
+                ? 'border-b-2 border-blue-600 text-blue-600'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </nav>
 
       {/* Content */}
       <main className="flex-1 overflow-y-auto">
-        {activeTab === 'inspector' && <Inspector />}
         {activeTab === 'editor' && (
           <ElementEditor
             element={selectedElement}
             onClear={() => setSelectedElement(null)}
             onElementUpdate={setSelectedElement}
+            inspector={inspector}
           />
         )}
         {aiOpened.current && (
           <div className={activeTab === 'ai' ? 'h-full' : 'hidden'}>
             <AIChatBox
+              inspector={inspector}
               selectedElement={selectedElement}
               onClear={() => setSelectedElement(null)}
               initialPrompt={pendingPrompt}
@@ -149,6 +113,7 @@ const App: React.FC = () => {
         )}
         {activeTab === 'export' && <ExportPanel />}
         {activeTab === 'settings' && <Settings />}
+        {activeTab === 'tokens' && <TokenUsagePanel />}
       </main>
 
       {/* Footer */}

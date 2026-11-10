@@ -22,8 +22,8 @@ UI and interaction conventions for the Revamp panel. Technical structure is in [
 ┌─────────────────────────────────┐
 │ Revamp · AI Page Editor    [x]  │  blue header, drag handle
 ├─────────────────────────────────┤
-│ Inspector Editor AI Demo        │  scrollable tab bar
-│ Export Settings                 │  Editor disabled until an element is selected
+│ Editor AI Demo Export           │  scrollable tab bar
+│ Settings Tokens                 │  opens on Editor
 ├─────────────────────────────────┤
 │                                 │
 │          active tab             │  scrolls independently
@@ -39,12 +39,12 @@ Selecting an element does not switch tabs; the user stays where they are. A note
 
 | Tab | Purpose | Key elements |
 |-----|---------|--------------|
-| **Inspector** | Choose an element | Start/stop button, status text, short instructions. Hover shows a blue overlay with a label; click selects. |
-| **Editor** | Manual edits to the selection | Element summary (tag, selector, selector type), text editor, attribute picker and value, CSS fields, undo. |
-| **AI Chat** | Natural-language changes | Provider/model picker, scope badge (whole page or selected element, with clear button), message list, attachment chips, input with a paperclip, change preview list. |
+| **Editor** | Choose an element and edit it by hand | Inspector toggle (⊕ Inspector / ⊗ Stop) in the header, also shown when nothing is selected; element summary (tag, selector, selector type), text editor, attribute picker and value, CSS fields, undo. Hover shows a blue overlay with a label; click selects. |
+| **AI Chat** | Natural-language changes | Inspector toggle, provider/model picker, scope badge (whole page or selected element, with clear button), message list, attachment chips, input with a paperclip, change preview list. |
 | **Demo** | Manage the demo | Demo name and on/off switch, Sections, Changes, Notes, Versions, Share, Present, Handoff. |
 | **Export** | Static copy | Option checkboxes, Export button, progress text, report of downloaded, failed and skipped assets. |
 | **Settings** | Providers | API key per provider (masked, show/hide), Azure endpoint, API version, deployment, key validation, model list. |
+| **Tokens** | Token usage of AI requests | Range switch (Today, Last 7 days, All), totals (requests, input, output, total), table per model, latest 50 requests with time and page, Clear history (with confirmation). Counts as the provider reports them; no prices. |
 
 ### Attachments in AI Chat
 - **Attach:** paperclip next to the input (the file dialog lists only what the chosen provider can use), drag files onto the chat (a blue ring shows the drop target), or paste an image into the input. Up to 5 files per message.

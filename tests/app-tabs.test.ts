@@ -17,12 +17,18 @@ vi.mock('../src/popup/components/AIChatBox', async () => {
     },
   };
 });
-for (const name of ['Inspector', 'ElementEditor', 'ExportPanel', 'Settings', 'DemoPanel']) {
-  vi.mock(`../src/popup/components/${name}`, async () => {
+// vi.mock is hoisted, so it cannot be called in a loop: one call per component
+const { stub } = vi.hoisted(() => ({
+  stub: async (name: string) => {
     const React = await import('react');
     return { default: () => React.createElement('div', null, name) };
-  });
-}
+  },
+}));
+vi.mock('../src/popup/components/ElementEditor', () => stub('ElementEditor'));
+vi.mock('../src/popup/components/ExportPanel', () => stub('ExportPanel'));
+vi.mock('../src/popup/components/Settings', () => stub('Settings'));
+vi.mock('../src/popup/components/DemoPanel', () => stub('DemoPanel'));
+vi.mock('../src/popup/components/TokenUsagePanel', () => stub('TokenUsagePanel'));
 vi.mock('../src/utils/attachment-store', () => ({ purgeOrphanAttachmentDatabases: vi.fn(async () => undefined) }));
 
 import App from '../src/popup/App';
@@ -59,6 +65,17 @@ afterEach(async () => {
 });
 
 describe('App tabs', () => {
+  it('has no Inspector tab, opens on the Editor and puts Tokens right after Settings', () => {
+    const labels = Array.from(container.querySelectorAll('nav button')).map((b) => b.textContent);
+    expect(labels).toEqual(['Editor', 'AI Chat', 'Demo', 'Export', 'Settings', 'Tokens']);
+    expect(container.querySelector('main')!.textContent).toBe('ElementEditor');
+  });
+
+  it('shows the token usage when Tokens is opened', async () => {
+    await open('Tokens');
+    expect(container.querySelector('main')!.textContent).toBe('TokenUsagePanel');
+  });
+
   it('does not build the AI chat until it is opened', () => {
     expect(chatInput()).toBeNull();
     expect(mounts.chat).toBe(0);

@@ -3,6 +3,7 @@ import React, { act, useState } from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import ElementEditor from '../src/popup/components/ElementEditor';
 import { InspectedElement } from '../src/types/inspector';
+import { useInspector } from '../src/popup/use-inspector';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -22,12 +23,13 @@ const inspect = (): InspectedElement => {
   };
 };
 
-const Host: React.FC = () => {
-  const [element, setElement] = useState<InspectedElement | null>(inspect());
+const Host: React.FC<{ initial?: InspectedElement | null }> = ({ initial }) => {
+  const [element, setElement] = useState<InspectedElement | null>(initial === undefined ? inspect() : initial);
   return React.createElement(ElementEditor, {
     element,
     onClear: () => setElement(null),
     onElementUpdate: setElement,
+    inspector: useInspector(),
   });
 };
 
@@ -67,6 +69,7 @@ beforeEach(() => {
   root = createRoot(container);
 
   (globalThis as any).chrome = {
+    runtime: { onMessage: { addListener: vi.fn(), removeListener: vi.fn() } },
     tabs: {
       query: vi.fn().mockResolvedValue([{ id: 1 }]),
       sendMessage: vi.fn(async (_tabId: number, message: any) => {
@@ -244,5 +247,37 @@ describe('ElementEditor style fields', () => {
       expect(confirmSpy).not.toHaveBeenCalled();
       expect(textMessages()).toHaveLength(1);
     });
+  });
+});
+
+describe('ElementEditor inspector toggle', () => {
+  const sent = () =>
+    ((globalThis as any).chrome.tabs.sendMessage as ReturnType<typeof vi.fn>).mock.calls.map(([, m]) => m.type);
+
+  it('starts and stops the inspector from the Editor tab', async () => {
+    await render();
+    await click('⊕ Inspector');
+    expect(sent()).toContain('START_INSPECTOR');
+
+    await click('⊗ Stop');
+    expect(sent()).toContain('STOP_INSPECTOR');
+    expect(container.textContent).toContain('⊕ Inspector');
+  });
+
+  it('offers the inspector when nothing is selected', async () => {
+    await act(async () => {
+      root.render(React.createElement(Host, { initial: null }));
+    });
+    expect(container.textContent).toContain('No element selected. Click Inspector');
+    await click('⊕ Inspector');
+    expect(sent()).toContain('START_INSPECTOR');
+  });
+
+  it('follows the page when it stops the inspector after a selection', async () => {
+    await render();
+    await click('⊕ Inspector');
+    const listener = ((globalThis as any).chrome.runtime.onMessage.addListener as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0];
+    await act(async () => listener({ type: 'INSPECTOR_STATE_CHANGED', isActive: false }));
+    expect(container.textContent).toContain('⊕ Inspector');
   });
 });
