@@ -2,7 +2,7 @@ import { AIChange, ChangeResult } from '../types/ai-response';
 import { Operation, OperationResult } from '../types/operations';
 import { HistoryItem, PersistedOperation } from '../types/demo';
 import { SelectorGenerator } from './selector-generator';
-import { applyOperation, applyStyles, sanitizeHtml, setSafeAttribute } from './operation-executor';
+import { applyOperation, applyStyles, CopyMap, resolveTarget, sanitizeHtml, setSafeAttribute } from './operation-executor';
 import { PageIndex } from './page-index';
 import { captureLocator } from './locator';
 
@@ -33,7 +33,8 @@ const nextKey = () => `h${Date.now().toString(36)}${(keyCounter++).toString(36)}
 
 /** Split an operation into its element references and the remaining arguments */
 function splitOperation(op: Operation): { args: Record<string, unknown> } {
-  const { id: _id, op: _op, target: _target, explanation: _explanation, ...rest } = op as Operation & {
+  // `in` only means something inside one reply; a saved change finds its element by locator
+  const { id: _id, op: _op, target: _target, explanation: _explanation, in: _in, ...rest } = op as Operation & {
     ref?: number;
   };
   const { ref: _ref, ...args } = rest as Record<string, unknown>;
@@ -138,13 +139,14 @@ export class ChangeManager {
    * failing operation never blocks or rolls back the others.
    */
   applyOperations(operations: Operation[], index: PageIndex): OperationResult[] {
-    return operations.map((op) => this.applyOne(op, index));
+    const copies: CopyMap = new Map();
+    return operations.map((op) => this.applyOne(op, index, copies));
   }
 
-  private applyOne(op: Operation, index: PageIndex): OperationResult {
+  private applyOne(op: Operation, index: PageIndex, copies: CopyMap): OperationResult {
     try {
       // Capture locators before applying: afterwards the element's text/position may differ
-      const targetEl = index.resolve(op.target);
+      const targetEl = resolveTarget(op, index, copies);
       const refEl = op.op === 'move' ? index.resolve(op.ref) : null;
       const persisted: PersistedOperation | undefined = targetEl
         ? {
@@ -157,7 +159,7 @@ export class ChangeManager {
           }
         : undefined;
 
-      const { revert, created } = applyOperation(op, index);
+      const { revert, created } = applyOperation(op, index, copies);
 
       this.push({
         key: nextKey(),

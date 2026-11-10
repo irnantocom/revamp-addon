@@ -5,8 +5,9 @@ import { Operation, OperationsResponse } from '../../types/operations';
 import { parseOperationsResponse } from '../../utils/operation-parser';
 import { buildSystemPrompt, PageIndexData } from '../../utils/prompt-builder';
 import { resolveAttachmentSources } from '../../utils/attachment-refs';
-import { fetchWebImages, pageUrlsFrom, WebImageSource } from '../../utils/web-images';
+import { countImageSlots, gatherWebImages, keywordsFrom, pageUrlsFrom, WebImageSource } from '../../utils/web-images';
 import { Ask, completeReply, describeEmptyReply, ReplyInfo } from '../../utils/reply-continuation';
+import { repairOperations } from '../../utils/operation-repair';
 import { InspectedElement } from '../../types/inspector';
 import ChangePreview, { ChangeItem, PreviewStatus } from './ChangePreview';
 import AttachmentChips from './AttachmentChips';
@@ -345,13 +346,27 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
       const hasAttachments = draftAttachments.length > 0 || messages.some((m) => m.attachments?.length);
       const webImages: WebImageSource[] = [];
       const webNotes: string[] = [];
+      // What the pictures should be about: the typed text and the attached documents
+      const keywordsOf = async () => {
+        const documents = await Promise.all(
+          draftAttachments.filter((a) => a.kind === 'document').map((a) => attachmentStore.get(a.id))
+        );
+        const texts = documents.flatMap((doc) => doc?.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])) ?? []);
+        return keywordsFrom([text, ...texts]);
+      };
+      const slots = countImageSlots(pageIndexData?.index ?? '');
       for (const page of pageUrlsFrom(text)) {
         const cached = webImageCache.current.get(page);
-        const result = cached ? { ok: true as const, source: cached } : await fetchWebImages(page);
+        const result = cached
+          ? { ok: true as const, source: cached, fromLibrary: 0 }
+          : await gatherWebImages(page, { needed: slots, keywords: slots > 0 ? await keywordsOf() : [] });
         if (result.ok) {
           webImageCache.current.set(page, result.source);
           webImages.push(result.source);
-          if (!cached) webNotes.push(`Read ${result.source.images.length} images from ${new URL(page).host} for the AI to choose from.`);
+          if (!cached) {
+            const library = result.fromLibrary > 0 ? `, ${result.fromLibrary} of them from the site's media library because the page has fewer images than this page has places for` : '';
+            webNotes.push(`Read ${result.source.images.length} images from ${new URL(page).host} for the AI to choose from${library}.`);
+          }
         } else {
           webNotes.push(`Could not read images from ${page}: ${result.error}.`);
         }
@@ -424,7 +439,30 @@ const AIChatBox: React.FC<Props> = ({ selectedElement, onClear, initialPrompt, o
         }
 
         // Preferred: operations on indexed elements
-        const operationsResponse = parseOperationsResponse(aiContent);
+        let operationsResponse = parseOperationsResponse(aiContent);
+
+        // set_html on a section would strip its template styling: have the page check, and ask the model to redo those
+        const rebuilds = operationsResponse?.operations.filter((o) => o.op === 'set_html') ?? [];
+        if (operationsResponse && rebuilds.length > 0) {
+          try {
+            const check = await chrome.tabs.sendMessage(tab.id, { type: 'CHECK_OPERATIONS', payload: { operations: rebuilds } });
+            const problems = check?.success ? check.data.problems : [];
+            if (problems.length > 0) {
+              const fixed = await repairOperations(ask, built.messages, maxTokens, aiContent, operationsResponse, problems);
+              if (fixed.repaired) {
+                operationsResponse = fixed.response;
+                aiContent = fixed.content;
+                requestNotes.push(
+                  `${problems.length} change(s) would have broken the layout (they rebuilt a section's HTML), so the AI was asked to redo them as separate text changes.`
+                );
+              } else {
+                requestNotes.push(`${problems.length} change(s) would break the layout and cannot be applied; ask the AI to change those sections element by element.`);
+              }
+            }
+          } catch (checkError) {
+            console.warn('[AI Chat] Could not check operations:', checkError);
+          }
+        }
 
         // Fallback: selector-based structured response
         const revampResponse = operationsResponse ? null : AIResponseParser.parse(aiContent);

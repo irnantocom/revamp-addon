@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { extractWebImages, fetchWebImages, MAX_WEB_IMAGES, pageUrlsFrom } from '../src/utils/web-images';
+import {
+  countImageSlots, extractWebImages, fetchWebImages, fetchWordPressMedia, gatherWebImages, keywordsFrom, MAX_WEB_IMAGES,
+  pageUrlsFrom, rankByKeywords,
+} from '../src/utils/web-images';
 
 const PAGE = 'https://www.example.com/en/home';
 const urls = (html: string) => extractWebImages(html, PAGE).map((i) => i.url);
@@ -79,8 +82,32 @@ describe('extractWebImages', () => {
     expect(image.alt.length).toBeLessThanOrEqual(60);
   });
 
-  it('lists at most 30 images', () => {
-    const html = Array.from({ length: 50 }, (_, i) => `<img src="/p${i}.jpg">`).join('');
+  it('lists one picture once even when the page uses it at several sizes', () => {
+    const html = `
+      <img src="/wp-content/uploads/ship-300x200.jpg" alt="Tall ship">
+      <img src="/wp-content/uploads/ship-1024x683.jpg">
+      <img src="/wp-content/uploads/ship.jpg">
+      <img src="/wp-content/uploads/ship-scaled.jpg">
+      <img src="/wp-content/uploads/deck.jpg?w=768"><img src="/wp-content/uploads/deck.jpg?w=1600">
+      <img src="/image.php?id=1"><img src="/image.php?id=2">`;
+
+    const images = extractWebImages(html, PAGE);
+
+    expect(images.map((i) => i.url)).toEqual([
+      'https://www.example.com/wp-content/uploads/ship.jpg',
+      'https://www.example.com/wp-content/uploads/deck.jpg?w=768',
+      'https://www.example.com/image.php?id=1',
+      'https://www.example.com/image.php?id=2',
+    ]);
+    expect(images[0].alt).toBe('Tall ship');
+  });
+
+  it('keeps the larger file when the smaller size comes first', () => {
+    expect(urls('<img src="/u/a-150x100.jpg"><img src="/u/a-800x600.jpg">')).toEqual(['https://www.example.com/u/a-800x600.jpg']);
+  });
+
+  it('lists at most 60 images', () => {
+    const html = Array.from({ length: 80 }, (_, i) => `<img src="/p${i}.jpg">`).join('');
 
     expect(urls(html)).toHaveLength(MAX_WEB_IMAGES);
   });
@@ -112,5 +139,125 @@ describe('fetchWebImages', () => {
 
     expect(down).toMatchObject({ ok: false, error: expect.stringContaining('could not be reached') });
     expect(slow).toMatchObject({ ok: false, error: expect.stringContaining('too long') });
+  });
+});
+
+describe('countImageSlots', () => {
+  it('counts <img> entries and elements with a background image', () => {
+    const index = ['[1] section', '  [2] img alt="a" src="/a.jpg"', '  [3] div (block) bg-image="url(x.jpg)"', '  [4] p "an img tag in text"', '[5] img alt="b" src="/b.jpg"'].join('\n');
+
+    expect(countImageSlots(index)).toBe(3);
+    expect(countImageSlots('')).toBe(0);
+  });
+});
+
+describe('keywordsFrom and rankByKeywords', () => {
+  it('keeps the words a text repeats, without common words', () => {
+    const words = keywordsFrom(['Christmas sailing aboard the ship. Christmas dinner, Christmas lights with this crew.']);
+
+    expect(words[0]).toBe('christmas');
+    expect(words).toContain('sailing');
+    expect(words).not.toContain('this');
+    expect(words).not.toContain('with');
+  });
+
+  it('puts the pictures that talk about the topic first and keeps the order otherwise', () => {
+    const images = [
+      { url: 'https://x.test/a.jpg', alt: 'Birthday cake' },
+      { url: 'https://x.test/Christmas_dinner.jpg', alt: '' },
+      { url: 'https://x.test/c.jpg', alt: 'Singapore skyline' },
+      { url: 'https://x.test/d.jpg', alt: 'Christmas lights over the bay' },
+    ];
+
+    expect(rankByKeywords(images, ['christmas', 'lights']).map((i) => i.url.split('/').pop())).toEqual([
+      'd.jpg', 'Christmas_dinner.jpg', 'a.jpg', 'c.jpg',
+    ]);
+  });
+});
+
+describe('fetchWordPressMedia', () => {
+  const item = (name: string, alt = '', title = name) => ({ source_url: `https://x.test/wp-content/uploads/${name}`, alt_text: alt, title: { rendered: title } });
+
+  it('lists the media library with alt text or the title, up to three pages', async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      const page = Number(new URL(url).searchParams.get('page'));
+      return new Response(JSON.stringify(page === 1 ? [item('a.jpg', 'Fireworks over Sentosa'), item('b.png', '', 'Dinner on deck <b>x</b>')] : [item('a-300x200.jpg')]));
+    });
+
+    const images = await fetchWordPressMedia('https://x.test/events/', fetchImpl as any);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(String(fetchImpl.mock.calls[0][0])).toContain('https://x.test/wp-json/wp/v2/media?per_page=100&page=1&media_type=image');
+    expect(images).toEqual([
+      { url: 'https://x.test/wp-content/uploads/a.jpg', alt: 'Fireworks over Sentosa' },
+      { url: 'https://x.test/wp-content/uploads/b.png', alt: 'Dinner on deck b x b' },
+    ]);
+  });
+
+  it.each([
+    ['an HTTP error', () => new Response('nope', { status: 404 })],
+    ['a body that is not a list', () => new Response('{"code":"rest_no_route"}')],
+    ['a body that is not JSON', () => new Response('<html>')],
+  ])('gives an empty list for %s', async (_label, reply) => {
+    expect(await fetchWordPressMedia('https://x.test/', vi.fn(async () => reply()) as any)).toEqual([]);
+  });
+
+  it('gives an empty list when the site cannot be reached', async () => {
+    expect(await fetchWordPressMedia('https://x.test/', vi.fn().mockRejectedValue(new TypeError('down')))).toEqual([]);
+  });
+});
+
+describe('gatherWebImages', () => {
+  const pageHtml = (count: number) => `<html><body>${Array.from({ length: count }, (_, i) => `<img src="/p${i}.jpg" alt="Page ${i}">`).join('')}</body></html>`;
+  const library = (names: string[]) => JSON.stringify(names.map((name) => ({ source_url: `https://x.test/wp-content/uploads/${name}`, alt_text: name.replace('.jpg', ''), title: { rendered: name } })));
+
+  const site = (html: string, media: Response | (() => Response)) =>
+    vi.fn(async (url: string) =>
+      String(url).includes('/wp-json/') ? (typeof media === 'function' ? media() : media.clone()) : new Response(html, { headers: { 'content-type': 'text/html' } })
+    ) as any;
+
+  it('does not touch the media library while the page has enough pictures', async () => {
+    const fetchImpl = site(pageHtml(5), new Response(library(['lib.jpg'])));
+
+    const result = await gatherWebImages('https://x.test/', { needed: 4, keywords: [], fetchImpl });
+
+    expect(result).toMatchObject({ ok: true, fromLibrary: 0 });
+    expect(fetchImpl.mock.calls.some(([url]: [string]) => String(url).includes('/wp-json/'))).toBe(false);
+  });
+
+  it('fills the gap from the media library, best match first, without repeating a page picture', async () => {
+    const html = '<img src="/wp-content/uploads/p0.jpg"><img src="/wp-content/uploads/p1-300x200.jpg">';
+    const fetchImpl = site(html, new Response(library(['p0.jpg', 'p1.jpg', 'birthday.jpg', 'christmas-dinner.jpg', 'harbour.jpg'])));
+
+    const result = await gatherWebImages('https://x.test/', { needed: 4, keywords: ['christmas'], fetchImpl });
+
+    expect(result.ok && result.fromLibrary).toBe(3);
+    const names = result.ok ? result.source.images.map((i) => i.url.split('/').pop()) : [];
+    expect(names).toEqual(['p0.jpg', 'p1-300x200.jpg', 'christmas-dinner.jpg', 'birthday.jpg', 'harbour.jpg']);
+  });
+
+  it('uses the media library when the page itself has no pictures', async () => {
+    const fetchImpl = site('<html><body><p>app</p></body></html>', new Response(library(['a.jpg', 'b.jpg'])));
+
+    const result = await gatherWebImages('https://x.test/', { needed: 3, keywords: [], fetchImpl });
+
+    expect(result).toMatchObject({ ok: true, fromLibrary: 2 });
+  });
+
+  it('keeps what the page gave when the site has no media library, and reports the page error when it gave nothing', async () => {
+    const few = await gatherWebImages('https://x.test/', { needed: 9, keywords: [], fetchImpl: site(pageHtml(2), new Response('x', { status: 404 })) });
+    const none = await gatherWebImages('https://x.test/', { needed: 9, keywords: [], fetchImpl: site('<p>app</p>', new Response('x', { status: 404 })) });
+
+    expect(few).toMatchObject({ ok: true, fromLibrary: 0 });
+    expect(few.ok && few.source.images).toHaveLength(2);
+    expect(none).toMatchObject({ ok: false, error: expect.stringContaining('no images found') });
+  });
+
+  it('never reads the media library when the number of places is unknown', async () => {
+    const fetchImpl = site(pageHtml(1), new Response(library(['lib.jpg'])));
+
+    await gatherWebImages('https://x.test/', { needed: 0, keywords: [], fetchImpl });
+
+    expect(fetchImpl.mock.calls.some(([url]: [string]) => String(url).includes('/wp-json/'))).toBe(false);
   });
 });

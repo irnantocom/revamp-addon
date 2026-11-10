@@ -60,18 +60,52 @@ export function sanitizeHtml(html: string): DocumentFragment {
 }
 
 /**
+ * Why an operation would damage the page's layout, or null. Replacing the HTML of an element drops the
+ * classes and inline styles of everything inside it, and AI-written HTML cannot carry them back (the
+ * index does not show class names): the section loses its grid, spacing and typography.
+ */
+export function layoutRisk(op: Operation, index: PageIndex): string | null {
+  if (op.op !== 'set_html') return null;
+  const el = index.resolve(op.target);
+  if (!el) return null;
+
+  const styled = '[class],[style]';
+  const lost = el.querySelectorAll(styled).length;
+  if (lost === 0 || sanitizeHtml(op.html).querySelectorAll(styled).length >= lost) return null;
+  return `Replacing the HTML of <${el.tagName.toLowerCase()}> [${op.target}] would remove the styling of ${lost} elements inside it and break the layout. Change the text of the elements inside it one by one instead.`;
+}
+
+/** For each `duplicate` of a reply (by operation id): every original element mapped to its counterpart in the copy */
+export type CopyMap = Map<string, Map<Element, Element>>;
+
+/**
+ * The element an operation acts on. With `in`, the target names an original element and the operation
+ * acts on its counterpart in the copy that operation made, since a copy has no id until the page is indexed again.
+ */
+export function resolveTarget(op: Operation, index: PageIndex, copies: CopyMap): Element | null {
+  const original = index.resolve(op.target);
+  if (!op.in) return original;
+
+  const pairs = copies.get(op.in);
+  if (!pairs) throw new Error(`"in": "${op.in}" must be the id of a duplicate operation earlier in the same reply.`);
+  const copy = original ? pairs.get(original) : undefined;
+  if (!copy) throw new Error(`Element [${op.target}] is not part of the copy made by ${op.in}.`);
+  return copy;
+}
+
+/**
  * Applies one operation and returns how to revert it.
  * Targets are resolved through the PageIndex and validated first, so a stale
  * or invented id fails with a clear message instead of touching the wrong node.
  */
-export function applyOperation(op: Operation, index: PageIndex): AppliedOperation {
+export function applyOperation(op: Operation, index: PageIndex, copies: CopyMap = new Map()): AppliedOperation {
   const created: Element[] = [];
-  const revert = applyOperationInner(op, index, created);
+  const revert = applyOperationInner(op, index, created, copies);
   return { revert, created: created.length ? created : undefined };
 }
 
-function applyOperationInner(op: Operation, index: PageIndex, created: Element[]): Revert {
-  const target = index.resolve(op.target);
+function applyOperationInner(op: Operation, index: PageIndex, created: Element[], copies: CopyMap): Revert {
+  const target = resolveTarget(op, index, copies);
   if (!target) {
     throw new Error(`Element [${op.target}] no longer exists on the page. Re-run the request.`);
   }
@@ -85,6 +119,8 @@ function applyOperationInner(op: Operation, index: PageIndex, created: Element[]
     }
 
     case 'set_html': {
+      const risk = layoutRisk(op, index);
+      if (risk) throw new Error(risk);
       const previous = Array.from(el.childNodes);
       el.replaceChildren(sanitizeHtml(op.html));
       return () => el.replaceChildren(...previous);
@@ -173,6 +209,10 @@ function applyOperationInner(op: Operation, index: PageIndex, created: Element[]
       clone.removeAttribute('data-revamp-hidden');
       parent.insertBefore(clone, el.nextSibling);
       created.push(clone);
+      const pairs = new Map<Element, Element>([[el, clone]]);
+      const originals = el.querySelectorAll('*');
+      clone.querySelectorAll('*').forEach((copy, i) => pairs.set(originals[i], copy));
+      copies.set(op.id, pairs);
       return () => clone.remove();
     }
 

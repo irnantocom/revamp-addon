@@ -3,6 +3,7 @@ import { PageIndex } from '../src/utils/page-index';
 import { ChangeManager } from '../src/utils/change-manager';
 import { parseOperationsResponse } from '../src/utils/operation-parser';
 import { Operation } from '../src/types/operations';
+import { layoutRisk } from '../src/utils/operation-executor';
 
 let index: PageIndex;
 let manager: ChangeManager;
@@ -132,6 +133,114 @@ describe('operations', () => {
     expect(el.style.getPropertyPriority('background-image')).toBe('important');
     manager.undo();
     expect(el.style.getPropertyValue('background-image')).toContain('old.jpg');
+  });
+
+  describe('operations on a copy ("in")', () => {
+    const dup = (): Operation => ({ id: 'dup', op: 'duplicate', target: idOf('#hero'), explanation: '' });
+    const inCopy = (op: Partial<Operation> & { op: string }): Operation => ({ id: 'x', explanation: '', in: 'dup', ...op }) as Operation;
+
+    it('changes the copy of an element and leaves the original alone', () => {
+      const results = manager.applyOperations(
+        [dup(), inCopy({ op: 'set_text', target: idOf('#hero h2'), text: 'Copy heading' } as any)],
+        index
+      );
+
+      expect(results.map((r) => r.success)).toEqual([true, true]);
+      const [original, copy] = Array.from(document.querySelectorAll('section'));
+      expect(original.querySelector('h2')!.textContent).toBe('Hero');
+      expect(copy.querySelector('h2')!.textContent).toBe('Copy heading');
+      expect(copy.nextElementSibling?.id).toBe('about');
+    });
+
+    it('moves the copy itself', () => {
+      const results = manager.applyOperations(
+        [dup(), inCopy({ id: 'mv', op: 'move', target: idOf('#hero'), ref: idOf('footer'), position: 'before' } as any)],
+        index
+      );
+
+      expect(results.every((r) => r.success)).toBe(true);
+      const sections = Array.from(document.querySelectorAll('section'));
+      expect(sections.map((s) => s.id)).toEqual(['hero', 'about', '']);
+      expect(document.querySelector('footer')!.previousElementSibling).toBe(sections[2]);
+    });
+
+    it('fails clearly when "in" names no earlier duplicate or the element is outside the copy', () => {
+      const [unknown] = manager.applyOperations([inCopy({ op: 'set_text', target: idOf('h1'), text: 'x', in: 'nope' } as any)], index);
+      const [, outside] = manager.applyOperations([dup(), inCopy({ id: 'o', op: 'set_text', target: idOf('#about h2'), text: 'x' } as any)], index);
+
+      expect(unknown.error).toContain('must be the id of a duplicate operation');
+      expect(outside.error).toContain('is not part of the copy made by dup');
+      expect(document.querySelector('#about h2')!.textContent).toBe('About');
+    });
+
+    it('does not save "in", and undoing the duplicate also undoes the edits in the copy', () => {
+      manager.applyOperations([dup(), inCopy({ op: 'set_text', target: idOf('#hero h2'), text: 'Copy heading' } as any)], index);
+
+      expect(JSON.stringify(manager.persistedOperations().map((p) => p.args))).not.toContain('"in"');
+      expect(manager.revertByKey(manager.list()[0].key)).toBe(2);
+      expect(document.querySelectorAll('section')).toHaveLength(2);
+    });
+
+    it('is kept by the parser', () => {
+      const parsed = parseOperationsResponse(JSON.stringify({
+        operations: [{ id: 'dup', op: 'duplicate', target: 3 }, { id: 'a', op: 'set_text', target: 4, in: 'dup', text: 'x' }],
+      }))!;
+
+      expect(parsed.operations.map((o) => o.in)).toEqual([undefined, 'dup']);
+    });
+  });
+
+  describe('tables with set_html', () => {
+    it('shows an inline-styled table in a paragraph', () => {
+      const html = '<table style="width:100%;border-collapse:collapse"><thead><tr><th style="padding:8px">Date</th></tr></thead><tbody><tr><td style="padding:8px">23 Dec</td></tr></tbody></table>';
+
+      const result = run({ id: '1', op: 'set_html', target: idOf('#hero > p'), html, explanation: '' });
+
+      expect(result.success).toBe(true);
+      const table = document.querySelector('#hero > p table') as HTMLElement;
+      expect(table.style.borderCollapse).toBe('collapse');
+      expect(table.querySelectorAll('td, th')).toHaveLength(2);
+      manager.undo();
+      expect(document.querySelector('#hero > p')!.textContent).toBe('Hero text');
+    });
+  });
+
+  describe('set_html layout guard', () => {
+    const card = `<div class="grid"><div class="card"><h3 class="title">A</h3><p class="body">a</p></div><div class="card"><h3 class="title">B</h3></div></div>`;
+
+    beforeEach(() => {
+      document.querySelector('#about')!.innerHTML = card;
+    });
+
+    it('refuses to rebuild a styled section, and leaves it untouched', () => {
+      const before = document.querySelector('#about')!.innerHTML;
+      const result = run({ id: '1', op: 'set_html', target: idOf('#about'), html: '<h2>New</h2><p>Text</p>', explanation: '' });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('would remove the styling of 6 elements');
+      expect(document.querySelector('#about')!.innerHTML).toBe(before);
+    });
+
+    it('allows a small element without styled children', () => {
+      const result = run({ id: '1', op: 'set_html', target: idOf('#hero > p'), html: 'Line one<br>Line <strong>two</strong>', explanation: '' });
+
+      expect(result.success).toBe(true);
+      expect(document.querySelector('#hero > p')!.innerHTML).toBe('Line one<br>Line <strong>two</strong>');
+    });
+
+    it('allows html that keeps at least as many styled elements', () => {
+      const html = '<div class="grid"><div class="card"><h3 class="title">X</h3><p class="body">x</p></div><div class="card"><h3 class="title">Y</h3></div></div>';
+
+      expect(run({ id: '1', op: 'set_html', target: idOf('#about'), html, explanation: '' }).success).toBe(true);
+    });
+
+    it('layoutRisk reports the problem without touching the page', () => {
+      const op: Operation = { id: '1', op: 'set_html', target: idOf('#about'), html: '<p>x</p>', explanation: '' };
+
+      expect(layoutRisk(op, index)).toContain('break the layout');
+      expect(layoutRisk({ ...op, op: 'set_text', text: 'x' } as Operation, index)).toBeNull();
+      expect(layoutRisk({ ...op, target: 99999 }, index)).toBeNull();
+    });
   });
 
   it('replace_image refuses non-images', () => {

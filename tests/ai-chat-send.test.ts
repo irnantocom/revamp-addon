@@ -353,3 +353,115 @@ describe('AIChatBox: an empty reply', () => {
     expect(container.textContent).toContain('The AI returned an empty reply (finish reason: stop)');
   });
 });
+
+describe('AIChatBox: operations that would break the layout', () => {
+  const text = (n: number) => ({ id: `op-${n}`, op: 'set_text', target: n, text: `T${n}`, explanation: 'e' });
+  const rebuild = { id: 'op-2', op: 'set_html', target: 30, html: '<h2>x</h2>', explanation: 'e' };
+  const json = (ops: unknown[]) => '```json\n' + JSON.stringify({ explanation: 'x', operations: ops, warnings: [] }) + '\n```';
+  let pageMessages: any[];
+
+  const mockPage = (problems: Array<{ operationId: string; error: string }>) => {
+    pageMessages = [];
+    (globalThis as any).chrome.tabs.sendMessage = vi.fn(async (_tabId: number, message: any) => {
+      pageMessages.push(message);
+      if (message.type === 'GET_PAGE_INDEX') return { success: true, data: { mode: 'element', rootId: 1, rootTag: 'div', index: '[30] div', count: 1, truncated: false, url: 'https://x.test', title: 'T' } };
+      if (message.type === 'CHECK_OPERATIONS') return { success: true, data: { problems } };
+      return { success: true, data: { summary: 'ok' } };
+    });
+  };
+
+  const answerWith = (replies: any[]) => {
+    const original = (globalThis as any).chrome.runtime.sendMessage;
+    (globalThis as any).chrome.runtime.sendMessage = vi.fn(async (message: any) => {
+      if (message.type !== 'AI_REQUEST') return original(message);
+      requests.push(message.payload);
+      return replies[requests.length - 1] ?? replies[replies.length - 1];
+    });
+  };
+
+  it('asks the page which set_html operations are unsafe and has the model redo them', async () => {
+    mockPage([{ operationId: 'op-2', error: 'would break the layout' }]);
+    answerWith([
+      { success: true, data: { content: json([text(1), rebuild]), usage: {} } },
+      { success: true, data: { content: json([text(40), text(41)]), usage: {} } },
+    ]);
+    await typeText('replace the content');
+    await send();
+
+    expect(pageMessages.find((m) => m.type === 'CHECK_OPERATIONS').payload.operations.map((o: any) => o.id)).toEqual(['op-2']);
+    expect(requests).toHaveLength(2);
+    const last = requests[1].messages[requests[1].messages.length - 1];
+    expect(last.content).toContain('refused because they would break the page');
+    expect(container.textContent).toContain('1 change(s) would have broken the layout');
+    expect(container.textContent).not.toContain('"op":"set_html"');
+    for (const id of ['op-1', 'op-40', 'op-41']) expect(container.textContent).toContain(`"id":"${id}"`);
+  });
+
+  it('does not ask the page or the model when there is no set_html', async () => {
+    mockPage([]);
+    answerWith([{ success: true, data: { content: json([text(1)]), usage: {} } }]);
+    await typeText('change one thing');
+    await send();
+
+    expect(pageMessages.some((m) => m.type === 'CHECK_OPERATIONS')).toBe(false);
+    expect(requests).toHaveLength(1);
+  });
+
+  it('says so when the model cannot redo them', async () => {
+    mockPage([{ operationId: 'op-2', error: 'would break the layout' }]);
+    answerWith([
+      { success: true, data: { content: json([text(1), rebuild]), usage: {} } },
+      { success: false, error: 'boom' },
+    ]);
+    await typeText('replace the content');
+    await send();
+
+    expect(container.textContent).toContain('1 change(s) would break the layout and cannot be applied');
+  });
+});
+
+describe('AIChatBox: images when the reference page has too few', () => {
+  const html = '<html><body><img src="/one.jpg" alt="One"></body></html>';
+  const library = JSON.stringify([{ source_url: 'https://ship.test/wp-content/uploads/christmas-dinner.jpg', alt_text: 'Christmas dinner on deck', title: { rendered: 'x' } }]);
+  const slots = (count: number) => Array.from({ length: count }, (_, i) => `[${i + 1}] img alt="a" src="/i${i}.jpg"`).join('\n');
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  const pageWithSlots = (count: number) => {
+    (globalThis as any).chrome.tabs.sendMessage = vi.fn(async (_tabId: number, message: any) =>
+      message.type === 'GET_PAGE_INDEX'
+        ? { success: true, data: { mode: 'page', rootId: 1, rootTag: 'body', index: slots(count), count, truncated: false, url: 'https://x.test', title: 'T' } }
+        : { success: true }
+    );
+  };
+
+  beforeEach(() => {
+    aiResponse = { success: true, data: { content: 'ok', usage: {} } };
+    fetchMock = vi.fn(async (url: string) =>
+      String(url).includes('/wp-json/') ? new Response(library) : new Response(html, { headers: { 'content-type': 'text/html' } })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('adds pictures from the media library and says why', async () => {
+    pageWithSlots(4);
+    await typeText('use christmas images from https://ship.test/');
+    await send();
+
+    const prompt = requests[0].messages[0].content as string;
+    expect(prompt).toContain('https://ship.test/one.jpg');
+    expect(prompt).toContain('https://ship.test/wp-content/uploads/christmas-dinner.jpg');
+    expect(prompt).toContain('Use each listed image at most once');
+    expect(container.textContent).toContain("1 of them from the site's media library");
+  });
+
+  it('leaves the media library alone when the page has enough pictures', async () => {
+    pageWithSlots(1);
+    await typeText('use images from https://ship.test/');
+    await send();
+
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/wp-json/'))).toBe(false);
+    expect(container.textContent).not.toContain('media library');
+  });
+});

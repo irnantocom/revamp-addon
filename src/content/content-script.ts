@@ -17,6 +17,7 @@ import { Annotation } from '../types/demo';
 import { Operation } from '../types/operations';
 import { AIRevampResponse, AIChange, ChangeResult } from '../types/ai-response';
 import { legacyChangeToOperations } from '../utils/legacy-changes';
+import { layoutRisk } from '../utils/operation-executor';
 import { SubtreeSnapshot, ChildSummary, ElementAttribute } from '../types/dom-snapshot';
 import {
   InspectedElement,
@@ -226,6 +227,17 @@ class RevampInspector {
 
         case 'APPLY_OPERATIONS':
           sendResponse(this.applyOperations(message.payload?.operations || []));
+          break;
+
+        case 'CHECK_OPERATIONS':
+          sendResponse({
+            success: true,
+            data: {
+              problems: (message.payload?.operations || [])
+                .map((op: Operation) => ({ operationId: op.id, error: layoutRisk(op, pageIndex) }))
+                .filter((problem: { error: string | null }) => problem.error),
+            },
+          });
           break;
 
         case 'PREVIEW_OPERATIONS':

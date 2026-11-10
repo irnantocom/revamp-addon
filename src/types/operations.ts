@@ -9,6 +9,11 @@ interface BaseOperation {
   id: string;
   /** Revamp ID of the target element, as listed in the page index */
   target: number;
+  /**
+   * Id of an earlier `duplicate` operation in the same reply. `target` then names the ORIGINAL element and
+   * the operation acts on its counterpart inside that copy, because the copy has no id of its own yet.
+   */
+  in?: string;
   /** Short human-readable reason shown in the UI */
   explanation: string;
 }

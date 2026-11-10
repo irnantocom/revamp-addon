@@ -19,6 +19,7 @@ export function validateOperation(raw: any, index: number): Operation | string {
     id: isStr(raw.id) && raw.id ? raw.id : `op-${index + 1}`,
     target,
     explanation: isStr(raw.explanation) && raw.explanation ? raw.explanation : '',
+    ...(isStr(raw.in) && raw.in ? { in: raw.in } : {}),
   };
 
   switch (raw.op) {

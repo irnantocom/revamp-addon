@@ -139,6 +139,24 @@ describe('DemoManager', () => {
     expect(demo.getState().items).toHaveLength(4);
   });
 
+  it('replays edits made inside a copy made in the same batch', async () => {
+    history.applyOperations([
+      { id: 'dup', op: 'duplicate', target: idOf('#about'), explanation: '' },
+      { id: 'h', op: 'set_text', target: idOf('#about h2'), in: 'dup', text: 'Copy', explanation: '' },
+      { id: 'm', op: 'move', target: idOf('#about'), in: 'dup', ref: idOf('footer'), position: 'before', explanation: '' },
+    ], index);
+    await new Promise((r) => setTimeout(r, 400));
+
+    document.body.innerHTML = PAGE;
+    make();
+    await demo.init();
+
+    const sections = Array.from(document.querySelectorAll('section'));
+    expect(sections).toHaveLength(3);
+    expect(sections.map((s) => s.querySelector('h2')!.textContent)).toEqual(['Hero', 'About', 'Copy']);
+    expect(document.querySelector('footer')!.previousElementSibling).toBe(sections[2]);
+  });
+
   it('does not touch the old tab-independent storage', async () => {
     edit();
     await new Promise((r) => setTimeout(r, 400));
