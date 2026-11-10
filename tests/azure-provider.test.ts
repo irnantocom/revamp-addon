@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AzureOpenAIProvider } from '../src/ai/azure-openai-provider';
+import { AzureOpenAIProvider, parseAzureDeployments, pickAzureDeployment } from '../src/ai/azure-openai-provider';
 
 const base = {
   apiKey: ' key ',
@@ -133,5 +133,35 @@ describe('AzureOpenAIProvider', () => {
     expect(result.error).toContain('HTTP 404');
     expect(result.error).toContain('/openai/deployments/clloh-n8n-gpt-4.1-mini/chat/completions');
     expect(result.error).toContain('deployment "clloh-n8n-gpt-4.1-mini" exists');
+  });
+});
+
+describe('Azure deployment setting', () => {
+  it('reads one or more names separated by commas or new lines', () => {
+    expect(parseAzureDeployments('gpt-4o')).toEqual(['gpt-4o']);
+    expect(parseAzureDeployments(' gpt-4o , gpt-5-mini,\nclloh-n8n-gpt-4.1-mini ,, gpt-4o')).toEqual([
+      'gpt-4o',
+      'gpt-5-mini',
+      'clloh-n8n-gpt-4.1-mini',
+    ]);
+    expect(parseAzureDeployments('')).toEqual([]);
+    expect(parseAzureDeployments(undefined)).toEqual([]);
+  });
+
+  it('uses the deployment picked in the chat, or the first when it is not configured', () => {
+    expect(pickAzureDeployment('gpt-4o, gpt-5-mini', 'gpt-5-mini')).toBe('gpt-5-mini');
+    expect(pickAzureDeployment('gpt-4o, gpt-5-mini', 'gpt-4.1')).toBe('gpt-4o');
+    expect(pickAzureDeployment('gpt-4o, gpt-5-mini', undefined)).toBe('gpt-4o');
+    expect(pickAzureDeployment('', 'gpt-4o')).toBeUndefined();
+  });
+
+  it('calls the URL of the deployment it is given', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json(200, ok));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const deployment = pickAzureDeployment('gpt-4o, gpt-5-mini', 'gpt-5-mini')!;
+    await new AzureOpenAIProvider({ ...base, deployment }).generateCompletion(msgs, deployment);
+
+    expect(fetchMock.mock.calls[0][0]).toContain('/openai/deployments/gpt-5-mini/chat/completions');
   });
 });

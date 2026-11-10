@@ -43,7 +43,7 @@ Selecting an element does not switch tabs; the user stays where they are. A note
 | **AI Chat** | Natural-language changes | Inspector toggle, provider/model picker, scope badge (whole page or selected element, with clear button), message list, attachment chips, input with a paperclip, change preview list. |
 | **Demo** | Manage the demo | Demo name and on/off switch, Sections, Changes, Notes, Versions, Share, Present, Handoff. |
 | **Export** | Static copy | Option checkboxes, Export button, progress text, report of downloaded, failed and skipped assets. |
-| **Settings** | Providers | API key per provider (masked, show/hide), Azure endpoint, API version, deployment, key validation, model list. |
+| **Settings** | Providers | API key per provider (masked, show/hide), Azure endpoint, API version, deployment names (comma-separated; each one is a model in AI Chat, the connection test uses the first), key validation, model list. |
 | **Tokens** | Token usage of AI requests | Range switch (Today, Last 7 days, All), totals (requests, input, output, total), table per model, latest 50 requests with time and page, Clear history (with confirmation). Counts as the provider reports them; no prices. |
 
 ### Attachments in AI Chat

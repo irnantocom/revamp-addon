@@ -465,3 +465,61 @@ describe('AIChatBox: images when the reference page has too few', () => {
     expect(container.textContent).not.toContain('media library');
   });
 });
+
+describe('AIChatBox: Azure deployments', () => {
+  let deployments: string[];
+  const modelSelect = () => container.querySelectorAll('select')[1] as HTMLSelectElement;
+  const modelOptions = () => Array.from(modelSelect().options).map((o) => o.value);
+
+  beforeEach(async () => {
+    deployments = ['gpt-4o'];
+    (globalThis as any).chrome.runtime.sendMessage = vi.fn(async (message: any) => {
+      if (message.type === 'GET_SETTINGS') return { success: true, data: { apiKeys: { azure: 'key' } } };
+      if (message.type === 'FETCH_MODELS') return { success: true, data: deployments };
+      if (message.type === 'AI_REQUEST') {
+        requests.push(message.payload);
+        return { success: true, data: { content: 'ok', usage: {} } };
+      }
+      return { success: true };
+    });
+    act(() => root.unmount());
+    root = createRoot(container);
+    await act(async () => {
+      root.render(React.createElement(AIChatBox, { inspector: { active: false, toggle: async () => {} } }));
+    });
+    await settle();
+  });
+
+  it('picks up deployments saved in Settings while the chat is open, keeping the chosen one', async () => {
+    expect(modelOptions()).toEqual(['gpt-4o']);
+
+    deployments = ['gpt-4o', 'gpt-5-mini'];
+    const onChanged = (globalThis as any).chrome.storage.onChanged.addListener as ReturnType<typeof vi.fn>;
+    await act(async () => {
+      for (const [listener] of onChanged.mock.calls) listener({ settings: { newValue: {} } }, 'local');
+    });
+    await settle();
+
+    expect(modelOptions()).toEqual(['gpt-4o', 'gpt-5-mini']);
+    expect(modelSelect().value).toBe('gpt-4o');
+  });
+
+  it('sends the deployment picked in the model list', async () => {
+    deployments = ['gpt-4o', 'gpt-5-mini'];
+    const onChanged = (globalThis as any).chrome.storage.onChanged.addListener as ReturnType<typeof vi.fn>;
+    await act(async () => {
+      for (const [listener] of onChanged.mock.calls) listener({ settings: { newValue: {} } }, 'local');
+    });
+    await settle();
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!;
+      setter.call(modelSelect(), 'gpt-5-mini');
+      modelSelect().dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    await typeText('make the heading shorter');
+    await send();
+
+    expect(requests.at(-1)).toMatchObject({ provider: 'azure', model: 'gpt-5-mini' });
+  });
+});

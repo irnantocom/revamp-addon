@@ -6,7 +6,7 @@
 import { OpenAIProvider } from '../ai/openai-provider';
 import { ClaudeProvider } from '../ai/claude-provider';
 import { GeminiProvider } from '../ai/gemini-provider';
-import { AzureOpenAIProvider } from '../ai/azure-openai-provider';
+import { AzureOpenAIProvider, parseAzureDeployments, pickAzureDeployment } from '../ai/azure-openai-provider';
 import type { AIRequest } from '../ai/provider-interface';
 import { assertPayloadSize } from './payload-guard';
 import { purgeTabState } from './tab-state';
@@ -196,8 +196,9 @@ async function handleAIRequest(
       case 'openai':
         provider = new OpenAIProvider({ apiKey });
         break;
-      case 'azure':
-        if (!azure.endpoint || !azure.apiVersion || !azure.deployment) {
+      case 'azure': {
+        const deployment = pickAzureDeployment(azure.deployment, payload.model);
+        if (!azure.endpoint || !azure.apiVersion || !deployment) {
           sendResponse({
             success: false,
             error: 'Azure OpenAI endpoint, API version and deployment must be set in Settings.',
@@ -208,9 +209,10 @@ async function handleAIRequest(
           apiKey,
           endpoint: azure.endpoint,
           apiVersion: azure.apiVersion,
-          deployment: azure.deployment,
+          deployment,
         });
         break;
+      }
       case 'claude':
         provider = new ClaudeProvider({ apiKey });
         break;
@@ -294,8 +296,7 @@ async function handleFetchModels(
     switch (payload.provider) {
       case 'azure': {
         const stored = await chrome.storage.local.get('settings');
-        const deployment = stored.settings?.azure?.deployment;
-        models = deployment ? [deployment] : [];
+        models = parseAzureDeployments(stored.settings?.azure?.deployment);
         break;
       }
       case 'openai':
@@ -343,7 +344,9 @@ async function handleValidateApiKey(
         // A real request is the only way to know the endpoint, deployment and key work together
         const stored = await chrome.storage.local.get('settings');
         const azure = stored.settings?.azure || {};
-        if (!azure.endpoint || !azure.apiVersion || !azure.deployment) {
+        // Several deployments can be listed; the first stands for the connection
+        const deployment = parseAzureDeployments(azure.deployment)[0];
+        if (!azure.endpoint || !azure.apiVersion || !deployment) {
           sendResponse({ success: true, data: { isValid: false, message: 'Fill in endpoint, deployment and API version first.' } });
           return;
         }
@@ -351,9 +354,12 @@ async function handleValidateApiKey(
           apiKey: payload.apiKey,
           endpoint: azure.endpoint,
           apiVersion: azure.apiVersion,
-          deployment: azure.deployment,
-        }).generateCompletion([{ role: 'user', content: 'ping' }], azure.deployment, { maxTokens: 8, temperature: 0 });
-        sendResponse({ success: true, data: { isValid: result.success, message: result.success ? 'Connected.' : result.error } });
+          deployment,
+        }).generateCompletion([{ role: 'user', content: 'ping' }], deployment, { maxTokens: 8, temperature: 0 });
+        sendResponse({
+          success: true,
+          data: { isValid: result.success, message: result.success ? `Connected (deployment "${deployment}").` : result.error },
+        });
         return;
       }
       default:

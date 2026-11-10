@@ -36,7 +36,7 @@ Load it in Chrome:
 1. Open `chrome://extensions/` and enable **Developer mode**.
 2. Click **Load unpacked** and select the `dist` folder.
 3. Open a regular `http(s)` page and click the Revamp icon. The panel appears on the page.
-4. In **Settings**, add an API key for a provider (Azure also needs endpoint, API version and deployment).
+4. In **Settings**, add an API key for a provider (Azure also needs the endpoint, the API version and one or more deployment names separated by commas; each deployment shows up as a model in AI Chat).
 
 If the page was open before you installed or reloaded the extension, the icon click injects the content script on demand. Browser pages such as `chrome://` are not supported.
 

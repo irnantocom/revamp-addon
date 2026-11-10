@@ -162,9 +162,12 @@ const Settings: React.FC = () => {
                   type="text"
                   value={azure.deployment}
                   onChange={(e) => setAzure((prev) => ({ ...prev, deployment: e.target.value }))}
-                  placeholder="Deployment name"
+                  placeholder="Deployment names, comma-separated (e.g. gpt-4o, gpt-5-mini)"
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
+                <p className="text-xs text-gray-500">
+                  Each deployment appears as a model in AI Chat. Test Azure connection checks the first one.
+                </p>
                 <input
                   type="text"
                   value={azure.apiVersion}

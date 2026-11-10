@@ -200,14 +200,33 @@ const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initi
     loadApiKeys();
   }, []);
 
+  // The chat stays mounted while Settings changes; a saved Azure deployment list must reach the model picker
+  const [settingsVersion, setSettingsVersion] = useState(0);
+  useEffect(() => {
+    const handleChange = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area !== 'local' || !('settings' in changes)) return;
+      setProviderModels((prev) => {
+        const next = { ...prev };
+        delete next.azure;
+        return next;
+      });
+      setSettingsVersion((v) => v + 1);
+    };
+    chrome.storage.onChanged.addListener(handleChange);
+    return () => chrome.storage.onChanged.removeListener(handleChange);
+  }, []);
+
   // Fetch models when provider changes
   useEffect(() => {
     const fetchModelsForProvider = async () => {
       if (!provider || !apiKeys[provider]) return;
 
+      // A reload of the list (e.g. after Settings were saved) keeps the model the user picked
+      const keepOrFirst = (list: string[]) => setModel((current) => (list.includes(current) ? current : list[0] || ''));
+
       // Check if we already have models for this provider
       if (providerModels[provider] && providerModels[provider].length > 0) {
-        setModel(providerModels[provider][0]);
+        keepOrFirst(providerModels[provider]);
         return;
       }
 
@@ -223,7 +242,7 @@ const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initi
             ...prev,
             [provider]: response.data
           }));
-          setModel(response.data[0]);
+          keepOrFirst(response.data);
         } else {
           // Fallback to defaults
           const defaults = defaultModelOptions[provider] || [];
@@ -248,7 +267,7 @@ const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initi
     };
 
     fetchModelsForProvider();
-  }, [provider, apiKeys]);
+  }, [provider, apiKeys, settingsVersion]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });

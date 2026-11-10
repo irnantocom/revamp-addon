@@ -12,6 +12,19 @@ export interface AzureOpenAIConfig extends AIProviderConfig {
   deployment: string;
 }
 
+/** The Deployment setting holds one or more deployment names, separated by commas or new lines */
+export function parseAzureDeployments(setting: unknown): string[] {
+  if (typeof setting !== 'string') return [];
+  return Array.from(new Set(setting.split(/[,\n]/).map((name) => name.trim()).filter(Boolean)));
+}
+
+/** The deployment picked in the chat when it is one of the configured ones, otherwise the first */
+export function pickAzureDeployment(setting: unknown, requested: string | undefined): string | undefined {
+  const deployments = parseAzureDeployments(setting);
+  const wanted = requested?.trim();
+  return wanted && deployments.includes(wanted) ? wanted : deployments[0];
+}
+
 export class AzureOpenAIProvider implements IAIProvider {
   name = 'Azure OpenAI';
   models: string[];

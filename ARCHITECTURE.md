@@ -204,7 +204,7 @@ Chat and demo are per browser tab. The panel and the content script learn their 
 
 | Storage key (`chrome.storage.local`) | Value |
 |-----|------|
-| `settings` | `{ aiProvider, apiKeys, azure: { endpoint, apiVersion, deployment }, ... }` |
+| `settings` | `{ aiProvider, apiKeys, azure: { endpoint, apiVersion, deployment }, ... }`. `azure.deployment` is one or more deployment names separated by commas or new lines (`parseAzureDeployments`); `FETCH_MODELS` returns them as Azure's models, `AI_REQUEST` uses the chat's model when it is one of them and the first otherwise (`pickAzureDeployment`), and the connection test uses the first. Azure has no deployment list reachable with an API key, so the names must be typed in. `apiVersion` is sent as the `api-version` query parameter of every Azure request |
 | `demoVersions:<origin><pathname>` | `DemoVersion[]` |
 | `tokenUsage` | `TokenUsageRecord[]`: one per AI reply that reported usage (time, provider, model, input/output/reasoning/total tokens, page host and path), newest last, at most 1,000. Written by the service worker after every `AI_REQUEST`, including continuation and repair calls and failed requests that still reported usage; the Tokens tab reads it and follows `chrome.storage.onChanged`. Counts are the provider's own; no cost is computed |
 | `localStorage["revamp-panel-position"]` (host page) | floating panel x/y |

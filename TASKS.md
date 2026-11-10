@@ -2,7 +2,7 @@
 
 Status of delivered work and the open backlog. Product intent is in [PRD.md](PRD.md). Update this file when a task starts, finishes or is dropped.
 
-Last verified: `npm test` 408 passed (32 files), `npm run type-check` clean.
+Last verified: `npm test` 413 passed (32 files), `npm run type-check` clean.
 
 ## Delivered
 
@@ -25,6 +25,7 @@ Last verified: `npm test` 408 passed (32 files), `npm run type-check` clean.
 | Long and empty replies | Output-limit detection for all four providers; one retry with a bigger budget, then up to two continuations merged by id; an empty reply explains itself (finish reason, reasoning tokens) | `reply-continuation.ts`. Unit-tested; the cost of the extra requests is still to be observed |
 | Demo lost on reload | A demo too large for `chrome.storage.session` (10 MB) was not saved, silently, so a reload lost every change while Demo mode still showed On. The panel now shows why (`saveError` in `DEMO_STATE`), and an applied upload is re-encoded to WebP (1600 px at most, `image-shrink.ts`) so more pictures fit | Reproduced in Chrome 150 with nine 1.9 MB images; `tests/demo-reload.test.ts`, `tests/attachment-refs.test.ts`. A demo of many large pictures can still pass 10 MB: the notice says so. Whether this is what you hit on your page is unconfirmed |
 | Inspector in Editor, Tokens tab | The Inspector tab is gone: its start/stop toggle is in the Editor header (as in AI Chat), Editor is the opening tab and is always enabled. The service worker records the token usage of every AI reply (`tokenUsage` in `chrome.storage.local`, latest 1,000); a Tokens tab after Settings shows totals by range, per model and per request | `use-inspector.ts`, `token-usage.ts`, `TokenUsagePanel.tsx`; `tests/token-usage.test.ts`, `tests/app-tabs.test.ts`, `tests/element-editor.test.ts`. Not yet checked in the loaded extension |
+| Several Azure deployments | The Deployment setting takes several names (comma-separated); each is a model in the AI Chat picker and the request goes to the one picked there (before, the setting's single name always won). The chat reloads Azure's list when Settings are saved and keeps the picked model | `parseAzureDeployments`, `pickAzureDeployment`; `tests/azure-provider.test.ts`, `tests/ai-chat-send.test.ts`. Not yet checked against a real resource with two deployments |
 | Azure and OpenAI fixes | `temperature` and `max_completion_tokens` adapt to reasoning models; the token limit drops to the ceiling the API reports; Azure endpoints keep a gateway base path (API Management) and show the gateway's error message | Unit-tested (`azure-provider.test.ts`, `openai-provider.test.ts`); chat replies came back from the Azure deployment in later runs (the APIM endpoint and each deployment were not tested one by one) |
 
 ## Backlog
