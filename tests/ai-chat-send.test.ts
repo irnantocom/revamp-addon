@@ -466,6 +466,72 @@ describe('AIChatBox: images when the reference page has too few', () => {
   });
 });
 
+describe('AIChatBox: the design of a named site', () => {
+  const html = '<html><head><link rel="stylesheet" href="/theme.css"></head><body><img src="/one.jpg" alt="One"></body></html>';
+  const css = ':root { --gold: #d8bd8a; } body { font-family: Poppins, sans-serif; } .btn { background-color: #d8bd8a; border-radius: 999px; }';
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    aiResponse = { success: true, data: { content: 'ok', usage: {} } };
+    fetchMock = vi.fn(async (url: string) =>
+      String(url).endsWith('.css') ? new Response(css, { headers: { 'content-type': 'text/css' } }) : new Response(html, { headers: { 'content-type': 'text/html' } })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('reads the site\'s CSS when the message asks for its look, and hands it to the model as data', async () => {
+    await typeText('analisa design system situs https://ship.test/ lalu terapkan warna dan tombol');
+    await send();
+
+    const prompt = requests[0].messages[0].content as string;
+    expect(prompt).toContain('DESIGN OF WEB PAGES THE USER NAMED');
+    expect(prompt).toContain('--gold: #d8bd8a');
+    expect(prompt).toContain('font-family: Poppins, sans-serif');
+    expect(prompt).toContain('.btn: background-color: rgb(216, 189, 138); border-radius: 999px');
+    expect(container.textContent).toContain('Read the design of ship.test');
+  });
+
+  it('finds the site when the address is typed without https://', async () => {
+    await typeText('analisa design system situs www.ship.test lalu terapkan di halaman ini. cek button, teks, warna, background dan lainnya.');
+    await send();
+
+    expect(fetchMock.mock.calls[0][0]).toBe('https://www.ship.test/');
+    expect(requests[0].messages[0].content as string).toContain('--gold: #d8bd8a');
+    expect(container.textContent).toContain('Read the design of www.ship.test');
+  });
+
+  it('does not read CSS when the message only asks for the site\'s pictures', async () => {
+    await typeText('use the pictures from https://ship.test/');
+    await send();
+
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('.css'))).toBe(false);
+    expect(requests[0].messages[0].content as string).not.toContain('DESIGN OF WEB PAGES THE USER NAMED');
+  });
+
+  it('keeps the design for later messages without reading the site again', async () => {
+    await typeText('apply the colours of https://ship.test/');
+    await send();
+    const reads = fetchMock.mock.calls.length;
+
+    await typeText('make the buttons rounder');
+    await send();
+
+    expect(fetchMock.mock.calls.length).toBe(reads);
+    expect(requests[1].messages[0].content as string).toContain('--gold: #d8bd8a');
+  });
+
+  it('says so when the CSS cannot be read, and still sends the request', async () => {
+    fetchMock.mockImplementation(async () => new Response('', { status: 404 }));
+    await typeText('apply the colours of https://ship.test/');
+    await send();
+
+    expect(container.textContent).toContain('Could not read the design of https://ship.test/');
+    expect(requests).toHaveLength(1);
+  });
+});
+
 describe('AIChatBox: Azure deployments', () => {
   let deployments: string[];
   const modelSelect = () => container.querySelectorAll('select')[1] as HTMLSelectElement;

@@ -18,6 +18,7 @@ import { Operation } from '../types/operations';
 import { AIRevampResponse, AIChange, ChangeResult } from '../types/ai-response';
 import { legacyChangeToOperations } from '../utils/legacy-changes';
 import { layoutRisk } from '../utils/operation-executor';
+import { collectThemeVariables } from '../utils/theme-variables';
 import { SubtreeSnapshot, ChildSummary, ElementAttribute } from '../types/dom-snapshot';
 import {
   InspectedElement,
@@ -924,6 +925,8 @@ class RevampInspector {
           truncated,
           url: location.href,
           title: document.title,
+          // Variables are page-wide, so they only go with an index of the whole page
+          ...(root === document.body ? { theme: collectThemeVariables() } : {}),
         },
       };
     } catch (error) {

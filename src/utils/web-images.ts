@@ -63,14 +63,23 @@ function pictureUrl(raw: string, base?: string): URL | null {
   return /^https?:$/.test(url.protocol) && !SKIPPED_FILE.test(path) && !PLACEHOLDER.test(path) ? url : null;
 }
 
-/** Web pages (not image files) typed into a message, at most MAX_WEB_PAGES */
+// People write "www.example.com" without the scheme. A bare name counts only with www. or a well-known ending, so that
+// file names (index.html), code (element.id, node.js), versions and e-mail addresses are not taken for sites.
+const TLD = '(?:(?:com|co|net|org|gov|edu|ac|or|go)\\.[a-z]{2}|com|net|org|io|info|biz|edu|gov|app|dev|sg|my|au|uk|de|fr|nl|jp|cn|us|ca)';
+const LABEL = '[a-z0-9](?:[a-z0-9-]*[a-z0-9])?';
+const ADDRESS = new RegExp(
+  `https?://[^\\s<>"'\`]+|(?<![\\w@./:-])(?:www\\.${LABEL}(?:\\.${LABEL})+|${LABEL}(?:\\.${LABEL})*\\.${TLD})(?![\\w@-])(?::\\d+)?(?:/[^\\s<>"'\`]*)?`,
+  'gi'
+);
+
+/** Web pages (not image files) typed into a message, with or without https://, at most MAX_WEB_PAGES */
 export function pageUrlsFrom(text: string): string[] {
   const pages: string[] = [];
-  for (const match of text.matchAll(/https?:\/\/[^\s<>"'`]+/gi)) {
+  for (const match of text.matchAll(ADDRESS)) {
     const raw = match[0].replace(/[.,;:!?)\]}]+$/, '');
     let url: URL;
     try {
-      url = new URL(raw);
+      url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
     } catch {
       continue;
     }
@@ -146,7 +155,7 @@ export function extractWebImages(html: string, pageUrl: string): WebImage[] {
   return Array.from(found.values(), ({ url, alt }) => ({ url, alt }));
 }
 
-async function readCapped(response: Response, maxBytes: number): Promise<string> {
+export async function readCapped(response: Response, maxBytes: number): Promise<string> {
   if (!response.body) return (await response.text()).slice(0, maxBytes);
 
   const reader = response.body.getReader();

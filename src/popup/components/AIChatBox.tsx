@@ -7,6 +7,7 @@ import { buildSystemPrompt, PageIndexData } from '../../utils/prompt-builder';
 import { resolveAttachmentSources } from '../../utils/attachment-refs';
 import { shrinkDataUrl } from '../../utils/image-shrink';
 import { countImageSlots, gatherWebImages, keywordsFrom, pageUrlsFrom, WebImageSource } from '../../utils/web-images';
+import { fetchWebDesign, wantsDesign, type WebDesign } from '../../utils/web-design';
 import { Ask, completeReply, describeEmptyReply, ReplyInfo } from '../../utils/reply-continuation';
 import { repairOperations } from '../../utils/operation-repair';
 import { InspectedElement } from '../../types/inspector';
@@ -75,6 +76,7 @@ const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initi
   const [previewStatus, setPreviewStatus] = useState<PreviewStatus | null>(null);
   // Image lists read from pages the user named; kept so later messages can still use them
   const webImageCache = useRef(new Map<string, WebImageSource>());
+  const webDesignCache = useRef(new Map<string, WebDesign>());
   // Sections a document rewrite would leave as they were, per assistant message. Not persisted: ids die with the page.
   const [untouched, setUntouched] = useState<Record<string, Array<{ id: number; label: string }>>>({});
   const [loadingModels, setLoadingModels] = useState(false);
@@ -365,8 +367,35 @@ const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initi
           if (cached && !webImages.includes(cached) && webImages.length < 3) webImages.push(cached);
         }
       }
+      // The look of a named site is read only when the message asks for it, so a request for pictures costs nothing extra
+      const webDesigns: WebDesign[] = [];
+      if (wantsDesign(text)) {
+        for (const page of pageUrlsFrom(text)) {
+          const cached = webDesignCache.current.get(page);
+          const result = cached ? { ok: true as const, design: cached } : await fetchWebDesign(page);
+          if (result.ok) {
+            webDesignCache.current.set(page, result.design);
+            webDesigns.push(result.design);
+            if (!cached) {
+              const { design } = result;
+              webNotes.push(
+                `Read the design of ${new URL(page).host} for the AI to copy: ${design.variables.length} variables, ${design.text.length + design.components.length} style rules, from ${design.sheets} stylesheet${design.sheets === 1 ? '' : 's'}.`
+              );
+            }
+          } else {
+            webNotes.push(`Could not read the design of ${page}: ${result.error}.`);
+          }
+        }
+      }
+      for (const entry of messages) {
+        if (entry.role !== 'user') continue;
+        for (const page of pageUrlsFrom(entry.content)) {
+          const cached = webDesignCache.current.get(page);
+          if (cached && !webDesigns.includes(cached) && webDesigns.length < 2) webDesigns.push(cached);
+        }
+      }
       const built = await buildRequestMessages({
-        systemPrompt: buildSystemPrompt(pageIndexData, { hasAttachments, images, webImages }),
+        systemPrompt: buildSystemPrompt(pageIndexData, { hasAttachments, images, webImages, webDesigns }),
         history: messages.map((m) => ({ role: m.role, text: m.content, attachments: m.attachments })),
         draft: { text, attachments: draftAttachments },
         load: (id) => attachmentStore.get(id),

@@ -21,6 +21,21 @@ describe('pageUrlsFrom', () => {
     expect(pageUrlsFrom('https://x.test/a.webp?w=768 https://y.test/ https://y.test/ ftp://z.test/')).toEqual(['https://y.test/']);
   });
 
+  it('finds an address typed without https://, as people write it', () => {
+    expect(pageUrlsFrom('analisa design system situs www.tallship.com.sg lalu terapkan di halaman ini.')).toEqual(['https://www.tallship.com.sg/']);
+    expect(pageUrlsFrom('lihat tallship.com.sg/cruises, dan example.co.id')).toEqual(['https://tallship.com.sg/cruises', 'https://example.co.id/']);
+    expect(pageUrlsFrom('style of www.example.com.')).toEqual(['https://www.example.com/']);
+  });
+
+  it('counts an address once however it is written', () => {
+    expect(pageUrlsFrom('https://www.tallship.com.sg/ and www.tallship.com.sg')).toEqual(['https://www.tallship.com.sg/']);
+  });
+
+  it('does not take file names, code, e-mail addresses or versions for web pages', () => {
+    const text = 'edit index.html and logo.png, call element.id or node.js, mail me@example.com, version 1.2.3, e.g. this, https://x.test/page.json';
+    expect(pageUrlsFrom(text)).toEqual(['https://x.test/page.json']);
+  });
+
   it('reads at most two pages per message', () => {
     expect(pageUrlsFrom('https://a.test https://b.test https://c.test')).toHaveLength(2);
   });

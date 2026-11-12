@@ -119,4 +119,19 @@ describe('demo survives a reload', () => {
 
     expect(demo.getState().saveError).toContain('Extension context invalidated.');
   });
+
+  it('keeps a theme variable set on the page root across a reload, even when the body text changed', async () => {
+    await boot();
+    history.applyOperations([{ id: 't', op: 'set_style', target: index.idOf(document.body), styles: { '--accent': '#d8bd8a' }, explanation: '' }] as any, index);
+    await flush();
+
+    // a site that renders something different at the top of the body on each visit
+    document.body.innerHTML = '<p>other text</p>';
+    document.body.removeAttribute('style');
+    await boot();
+
+    expect(document.body.style.getPropertyValue('--accent')).toBe('#d8bd8a');
+    demo.setEnabled(false);
+    expect(document.body.style.getPropertyValue('--accent')).toBe('');
+  });
 });
