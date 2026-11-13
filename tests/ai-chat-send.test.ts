@@ -502,6 +502,67 @@ describe('AIChatBox: the design of a named site', () => {
     expect(container.textContent).toContain('Read the design of www.ship.test');
   });
 
+  describe('with the page drawn in a background tab', () => {
+    const drawn = {
+      elements: 813,
+      roles: [{ name: 'body', bg: '#f6f1f0', text: '#3b3b3b', font: 'Montserrat' }],
+      buttons: [{ bg: '#c8995c', text: '#ffffff', radius: '3px', transform: 'uppercase', font: 'Cinzel', count: 2 }],
+      accents: [{ color: '#00324b', weight: 429 }, { color: '#c8995c', weight: 116 }],
+    };
+    let tabs: any;
+
+    beforeEach(() => {
+      tabs = (globalThis as any).chrome.tabs;
+      tabs.create = vi.fn(async () => ({ id: 9 }));
+      tabs.get = vi.fn(async () => ({ status: 'complete', url: 'https://www.ship.test/' }));
+      tabs.remove = vi.fn(async () => undefined);
+      (globalThis as any).chrome.scripting = { executeScript: vi.fn(async () => [{ result: drawn }]) };
+    });
+
+    it('gives the model what the page really looks like, and tells the user a tab was opened', async () => {
+      await typeText('apply the colours of www.ship.test');
+      await send();
+
+      const prompt = requests[0].messages[0].content as string;
+      expect(tabs.create).toHaveBeenCalledWith({ url: 'https://www.ship.test/', active: false });
+      expect(tabs.remove).toHaveBeenCalledWith(9);
+      expect(prompt).toContain('As drawn on the page (what a visitor sees');
+      expect(prompt).toContain('Button: background #c8995c; text #ffffff; radius 3px; uppercase; font Cinzel; 2 on the page');
+      expect(prompt).toContain('Brand colours (saturated), most used first: #00324b, #c8995c');
+      expect(prompt).toContain('--gold: #d8bd8a');
+      expect(container.textContent).toContain('opened in a background tab, then closed');
+    });
+
+    it('opens no tab for a message that does not ask for the site\'s look', async () => {
+      await typeText('use the pictures from www.ship.test');
+      await send();
+
+      expect(tabs.create).not.toHaveBeenCalled();
+    });
+
+    it('keeps going with the stylesheets when the page cannot be drawn, and says why', async () => {
+      (globalThis as any).chrome.scripting.executeScript = vi.fn(async () => { throw new Error('blocked'); });
+      await typeText('apply the colours of www.ship.test');
+      await send();
+
+      const prompt = requests[0].messages[0].content as string;
+      expect(prompt).not.toContain('(what a visitor sees');
+      expect(prompt).toContain('--gold: #d8bd8a');
+      expect(tabs.remove).toHaveBeenCalledWith(9);
+      expect(container.textContent).toContain('could not be drawn (the page could not be read)');
+    });
+
+    it('does not open the tab again for a follow-up message', async () => {
+      await typeText('apply the colours of www.ship.test');
+      await send();
+      await typeText('make the buttons rounder');
+      await send();
+
+      expect(tabs.create).toHaveBeenCalledTimes(1);
+      expect(requests[1].messages[0].content as string).toContain('(what a visitor sees');
+    });
+  });
+
   it('does not read CSS when the message only asks for the site\'s pictures', async () => {
     await typeText('use the pictures from https://ship.test/');
     await send();

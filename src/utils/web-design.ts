@@ -7,6 +7,7 @@
  */
 import { prioritiseVariables, rootVariablesFrom, type ThemeVariable } from './theme-variables';
 import { readCapped } from './web-images';
+import type { RenderedResult } from './rendered-design';
 
 export interface WebDesign {
   page: string;
@@ -17,6 +18,8 @@ export interface WebDesign {
   components: string[];
   /** Stylesheets that were read, inline ones included */
   sheets: number;
+  /** How the page looks once drawn (see rendered-design.ts); absent when it could not be drawn */
+  rendered?: string[];
 }
 
 export type WebDesignResult = { ok: true; design: WebDesign } | { ok: false; error: string };
@@ -227,4 +230,26 @@ export async function fetchWebDesign(page: string, fetchImpl: typeof fetch = fet
     return { ok: false, error: 'no colours, fonts or button styles found in its CSS (the site may style itself with JavaScript)' };
   }
   return { ok: true, design };
+}
+
+export type GatheredDesign =
+  | { ok: true; design: WebDesign; render?: { ok: true; elements: number } | { ok: false; error: string } }
+  | { ok: false; error: string };
+
+/**
+ * The design of a page from both sources: its stylesheets (names, variables, rules) and, when `render`
+ * is given, the page drawn in a background tab (which colour and font each part really has). Either
+ * one is enough; the stylesheets stay the fallback when the page cannot be drawn.
+ */
+export async function gatherWebDesign(
+  page: string,
+  { fetchImpl = fetch, render }: { fetchImpl?: typeof fetch; render?: (page: string) => Promise<RenderedResult> } = {}
+): Promise<GatheredDesign> {
+  const [css, drawn] = await Promise.all([fetchWebDesign(page, fetchImpl), render ? render(page) : Promise.resolve(undefined)]);
+  const lines = drawn?.ok ? drawn.lines : undefined;
+  const render_ = drawn && (drawn.ok ? ({ ok: true, elements: drawn.elements } as const) : drawn);
+
+  if (css.ok) return { ok: true, design: { ...css.design, ...(lines ? { rendered: lines } : {}) }, ...(render_ ? { render: render_ } : {}) };
+  if (lines && render_) return { ok: true, design: { page, variables: [], text: [], components: [], sheets: 0, rendered: lines }, render: render_ };
+  return { ok: false, error: drawn && !drawn.ok ? `${css.error} (and ${drawn.error})` : css.error };
 }

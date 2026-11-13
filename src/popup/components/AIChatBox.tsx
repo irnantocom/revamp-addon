@@ -7,7 +7,8 @@ import { buildSystemPrompt, PageIndexData } from '../../utils/prompt-builder';
 import { resolveAttachmentSources } from '../../utils/attachment-refs';
 import { shrinkDataUrl } from '../../utils/image-shrink';
 import { countImageSlots, gatherWebImages, keywordsFrom, pageUrlsFrom, WebImageSource } from '../../utils/web-images';
-import { fetchWebDesign, wantsDesign, type WebDesign } from '../../utils/web-design';
+import { gatherWebDesign, wantsDesign, type WebDesign } from '../../utils/web-design';
+import { readRenderedDesign } from '../../utils/rendered-design';
 import { Ask, completeReply, describeEmptyReply, ReplyInfo } from '../../utils/reply-continuation';
 import { repairOperations } from '../../utils/operation-repair';
 import { InspectedElement } from '../../types/inspector';
@@ -372,15 +373,20 @@ const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initi
       if (wantsDesign(text)) {
         for (const page of pageUrlsFrom(text)) {
           const cached = webDesignCache.current.get(page);
-          const result = cached ? { ok: true as const, design: cached } : await fetchWebDesign(page);
+          const result = cached ? { ok: true as const, design: cached } : await gatherWebDesign(page, { render: readRenderedDesign });
           if (result.ok) {
             webDesignCache.current.set(page, result.design);
             webDesigns.push(result.design);
             if (!cached) {
               const { design } = result;
-              webNotes.push(
-                `Read the design of ${new URL(page).host} for the AI to copy: ${design.variables.length} variables, ${design.text.length + design.components.length} style rules, from ${design.sheets} stylesheet${design.sheets === 1 ? '' : 's'}.`
-              );
+              const sources = [
+                design.rendered ? 'the page as drawn (opened in a background tab, then closed)' : '',
+                design.sheets > 0
+                  ? `${design.variables.length} variables and ${design.text.length + design.components.length} style rules from ${design.sheets} stylesheet${design.sheets === 1 ? '' : 's'}`
+                  : '',
+              ].filter(Boolean);
+              const notDrawn = 'render' in result && result.render && !result.render.ok ? ` The page could not be drawn (${result.render.error}), so only its stylesheets were used.` : '';
+              webNotes.push(`Read the design of ${new URL(page).host} for the AI to copy: ${sources.join(' and ')}.${notDrawn}`);
             }
           } else {
             webNotes.push(`Could not read the design of ${page}: ${result.error}.`);

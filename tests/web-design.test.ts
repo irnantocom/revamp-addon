@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { extractDesign, fetchWebDesign, wantsDesign } from '../src/utils/web-design';
+import { extractDesign, fetchWebDesign, gatherWebDesign, wantsDesign } from '../src/utils/web-design';
 
 describe('wantsDesign', () => {
   it('recognises a request about a site\'s look, in English and Indonesian', () => {
@@ -255,5 +255,74 @@ describe('the reference design in the system prompt', () => {
     expect(buildSystemPrompt(data)).not.toContain('DESIGN OF WEB PAGES THE USER NAMED');
     expect(buildSystemPrompt(data, { webDesigns: [] })).not.toContain('DESIGN OF WEB PAGES THE USER NAMED');
     expect(buildSystemPrompt(data)).toMatch(/REFERENCE DESIGN\. When a DESIGN OF WEB PAGES/);
+  });
+});
+
+describe('gatherWebDesign', () => {
+  const home = html('<style>:root{--accent:#d8bd8a} .btn{background-color:#d8bd8a;color:#ffffff}</style>');
+  const rendered = { ok: true as const, lines: ['Brand colours (saturated), most used first: #00324b, #c8995c'], elements: 813 };
+  const page = 'https://x.test/';
+  const withSite = site({ [page]: reply(home, 'text/html') }) as unknown as typeof fetch;
+
+  it('adds how the page is drawn to what its stylesheets say', async () => {
+    const result = await gatherWebDesign(page, { fetchImpl: withSite, render: async () => rendered });
+
+    expect(result.ok && result.design.rendered).toEqual(rendered.lines);
+    expect(result.ok && result.design.variables).toEqual([{ name: '--accent', value: '#d8bd8a' }]);
+    expect(result.ok && result.render).toEqual({ ok: true, elements: 813 });
+  });
+
+  it('works from the drawn page alone when the stylesheets cannot be read', async () => {
+    const result = await gatherWebDesign(page, { fetchImpl: site({}) as unknown as typeof fetch, render: async () => rendered });
+
+    expect(result.ok && result.design).toMatchObject({ rendered: rendered.lines, variables: [], components: [], sheets: 0 });
+  });
+
+  it('falls back to the stylesheets and says why the page was not drawn', async () => {
+    const result = await gatherWebDesign(page, { fetchImpl: withSite, render: async () => ({ ok: false, error: 'the site took too long to load' }) });
+
+    expect(result.ok && result.design.rendered).toBeUndefined();
+    expect(result.ok && result.design.components.length).toBeGreaterThan(0);
+    expect(result.ok && result.render).toEqual({ ok: false, error: 'the site took too long to load' });
+  });
+
+  it('does not try to draw the page when no renderer is given', async () => {
+    const result = await gatherWebDesign(page, { fetchImpl: withSite });
+
+    expect(result.ok && result.render).toBeUndefined();
+  });
+
+  it('fails with both reasons when neither works', async () => {
+    const result = await gatherWebDesign(page, { fetchImpl: site({}) as unknown as typeof fetch, render: async () => ({ ok: false, error: 'the site could not be reached' }) });
+
+    expect(result).toEqual({ ok: false, error: 'the site answered HTTP 404 (and the site could not be reached)' });
+  });
+});
+
+describe('the drawn page in the system prompt', () => {
+  const data = { mode: 'page' as const, rootId: 7, rootTag: 'body', index: '[8] h1 "x"', count: 1, truncated: false, url: 'https://mine.test', title: 'T' };
+  const design = {
+    page: 'https://www.tallship.com.sg/',
+    variables: [{ name: '--gold', value: '#c8995c' }],
+    text: [],
+    components: [],
+    sheets: 0,
+    rendered: ['Button: background #c8995c; text #ffffff; radius 3px; uppercase; font Cinzel; 2 on the page'],
+  };
+
+  it('puts the drawn lines first, as what a visitor sees', async () => {
+    const { buildSystemPrompt } = await import('../src/utils/prompt-builder');
+    const prompt = buildSystemPrompt(data, { webDesigns: [design] });
+
+    expect(prompt).toContain('From https://www.tallship.com.sg/:');
+    expect(prompt).toContain('As drawn on the page (what a visitor sees');
+    expect(prompt.indexOf('(what a visitor sees')).toBeLessThan(prompt.indexOf('Variables:'));
+    expect(prompt).toContain('Button: background #c8995c; text #ffffff');
+  });
+
+  it('tells the model to take primary colours from the drawn page, not from the order of the variables', async () => {
+    const { buildSystemPrompt } = await import('../src/utils/prompt-builder');
+
+    expect(buildSystemPrompt(data)).toMatch(/As drawn on the page.*primary or brand colour is the first of "Brand colours".*not the first variable listed/s);
   });
 });
