@@ -12,7 +12,8 @@ const TEXT_TAGS = new Set([
   'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'a', 'button', 'li', 'label',
   'blockquote', 'figcaption', 'dt', 'dd', 'th', 'td', 'summary', 'span',
 ]);
-const MEDIA_TAGS = new Set(['img', 'video', 'picture', 'iframe']);
+// A <picture> is not listed itself: its <img> is, so that it can be replaced
+const MEDIA_TAGS = new Set(['img', 'video', 'iframe']);
 const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'template', 'svg', 'head', 'link', 'meta']);
 
 /** Smaller boxes with a background image are icons and sprites, not something to restyle */

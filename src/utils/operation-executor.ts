@@ -1,5 +1,6 @@
 import { Operation, OperationResult } from '../types/operations';
 import { PageIndex } from './page-index';
+import { LAZY_SRCSET_ATTRS, LAZY_SRC_ATTRS, isPlaceholderSrc, lazyOriginal } from './lazy-images';
 
 type Revert = () => void;
 
@@ -136,20 +137,33 @@ function applyOperationInner(op: Operation, index: PageIndex, created: Element[]
       if (!(el instanceof HTMLImageElement)) {
         throw new Error(`Element [${op.target}] is <${el.tagName.toLowerCase()}>, not an image.`);
       }
+      const previousSrc = el.getAttribute('src');
+      const picture = lazyOriginal(el);
       const reverts = [
         setSafeAttribute(el, 'src', op.src),
         // srcset/sizes would override the new src
         setSafeAttribute(el, 'srcset', null),
       ];
+      // A lazy-loader copies its data-* attributes into src and srcset when the image nears the screen, which
+      // would bring the old picture back as soon as the visitor scrolls: make them name the new one instead
+      for (const attr of LAZY_SRC_ATTRS) if (el.hasAttribute(attr)) reverts.push(setSafeAttribute(el, attr, op.src));
+      for (const attr of LAZY_SRCSET_ATTRS) if (el.hasAttribute(attr)) reverts.push(setSafeAttribute(el, attr, null));
       if (op.alt !== undefined) reverts.push(setSafeAttribute(el, 'alt', op.alt));
       // <picture><source> would also take priority over img src
-      const picture = el.parentElement?.tagName === 'PICTURE' ? el.parentElement : null;
-      if (picture) {
-        picture.querySelectorAll('source').forEach((source) => {
-          reverts.push(setSafeAttribute(source as HTMLElement, 'srcset', null));
+      const wrapper = el.parentElement?.tagName === 'PICTURE' ? el.parentElement : null;
+      if (wrapper) {
+        wrapper.querySelectorAll('source').forEach((source) => {
+          for (const attr of ['srcset', ...LAZY_SRCSET_ATTRS]) {
+            if (source.hasAttribute(attr)) reverts.push(setSafeAttribute(source as HTMLElement, attr, null));
+          }
         });
       }
-      return () => reverts.reverse().forEach((revert) => revert());
+      return () => {
+        reverts.reverse().forEach((revert) => revert());
+        // The page's loader may have finished with this image while it showed the new picture, and will not
+        // run again: a placeholder put back now would stay blank, so show the picture the page meant to
+        if (isPlaceholderSrc(previousSrc) && picture) el.setAttribute('src', picture);
+      };
     }
 
     case 'set_style':

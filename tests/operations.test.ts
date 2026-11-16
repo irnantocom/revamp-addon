@@ -115,6 +115,79 @@ describe('operations', () => {
     expect(img.getAttribute('srcset')).toBe('/a2.jpg 2x');
   });
 
+  describe('replace_image on lazy-loaded images', () => {
+    const PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+    const lazy = (attrs: string) => {
+      document.body.innerHTML = `<section><img id="l" src="${PLACEHOLDER}" ${attrs}></section>`;
+      index = new PageIndex();
+      return document.getElementById('l') as HTMLImageElement;
+    };
+    const replace = () => run({ id: 'r', op: 'replace_image', target: idOf('#l'), src: 'https://x/new.jpg', explanation: '' });
+
+    it('points the loader\'s own attributes at the new picture, so scrolling does not bring the old one back', () => {
+      const img = lazy('data-src="/o.jpg" data-lazy-src="/o.jpg" data-original="/o.jpg" data-srcset="/o.jpg 1x" data-lazy-srcset="/o.jpg 1x"');
+
+      expect(replace().success).toBe(true);
+
+      expect(img.getAttribute('src')).toBe('https://x/new.jpg');
+      for (const attr of ['data-src', 'data-lazy-src', 'data-original']) expect(img.getAttribute(attr)).toBe('https://x/new.jpg');
+      expect(img.hasAttribute('data-srcset')).toBe(false);
+      expect(img.hasAttribute('data-lazy-srcset')).toBe(false);
+    });
+
+    it('leaves a loader attribute alone that the image does not have', () => {
+      const img = lazy('data-src="/o.jpg"');
+      replace();
+
+      expect(img.hasAttribute('data-lazy-src')).toBe(false);
+      expect(img.hasAttribute('data-original')).toBe(false);
+    });
+
+    it('puts every attribute back on undo', () => {
+      const img = lazy('data-src="/o.jpg" data-srcset="/o.jpg 1x"');
+      const before = Array.from(img.attributes).map((a) => `${a.name}=${a.value}`).sort();
+      replace();
+      manager.undo();
+
+      // the placeholder is swapped for the picture the page itself would show, see the next test
+      expect(img.getAttribute('data-src')).toBe('/o.jpg');
+      expect(img.getAttribute('data-srcset')).toBe('/o.jpg 1x');
+      expect(Array.from(img.attributes).map((a) => a.name).sort()).toEqual(before.map((entry) => entry.split('=')[0]));
+    });
+
+    it('shows the page\'s own picture on undo instead of a blank placeholder, since its loader will not run again', () => {
+      const img = lazy('data-src="/o.jpg" class="lazyload"');
+      replace();
+      // the page's loader ran when the image scrolled into view, and is now finished with it
+      img.classList.replace('lazyload', 'lazyloaded');
+      manager.undo();
+
+      expect(img.getAttribute('src')).toBe('/o.jpg');
+    });
+
+    it('restores a picture that was already loaded exactly as it was', () => {
+      const img = lazy('data-src="/o.jpg"');
+      img.setAttribute('src', '/o.jpg');
+      replace();
+      manager.undo();
+
+      expect(img.getAttribute('src')).toBe('/o.jpg');
+      expect(img.getAttribute('data-src')).toBe('/o.jpg');
+    });
+
+    it('clears the lazy srcset of the <source> elements of a <picture>', () => {
+      document.body.innerHTML = `<picture><source id="s" srcset="/a.webp" data-srcset="/o.webp" data-lazy-srcset="/o.webp"><img id="l" src="${PLACEHOLDER}" data-src="/o.jpg"></picture>`;
+      index = new PageIndex();
+      const source = document.getElementById('s')!;
+
+      replace();
+      expect(['srcset', 'data-srcset', 'data-lazy-srcset'].some((attr) => source.hasAttribute(attr))).toBe(false);
+      manager.undo();
+      expect(source.getAttribute('data-srcset')).toBe('/o.webp');
+      expect(source.getAttribute('srcset')).toBe('/a.webp');
+    });
+  });
+
   it('replace_image accepts an uploaded image as a data URL and reverts it', () => {
     const img = document.querySelector('img')!;
     const src = 'data:image/png;base64,QUJD';

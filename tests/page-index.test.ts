@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { PageIndex } from '../src/utils/page-index';
+import { countImageSlots } from '../src/utils/web-images';
 
 let index: PageIndex;
 const build = () => index.build(document.body).text;
@@ -86,5 +87,18 @@ describe('PageIndex.untouchedSections', () => {
     (document.getElementById('b') as HTMLElement).style.display = 'none';
 
     expect(index.untouchedSections([a, 9999]).map((s) => s.label)).toEqual(['C']);
+  });
+});
+
+describe('PageIndex pictures', () => {
+  it('lists the <img> inside a <picture>, so it can be replaced, and not the picture itself', () => {
+    document.body.innerHTML = '<section><picture><source srcset="a.webp"><img alt="Hero" src="/a.jpg"></picture></section>';
+    const index = new PageIndex();
+
+    const { text } = index.build(document.body);
+
+    expect(text).toMatch(/\[\d+\] img alt="Hero" src="\/a.jpg"/);
+    expect(text).not.toMatch(/\] picture/);
+    expect(countImageSlots(text)).toBe(1);
   });
 });

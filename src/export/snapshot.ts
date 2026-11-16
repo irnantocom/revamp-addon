@@ -1,10 +1,7 @@
 import { NOISE_SELECTORS, isTrackingUrl } from './tracking';
 import { rewriteHtmlAssets } from './html-assets';
 import { PageSnapshot, SheetSource } from './types';
-
-const LAZY_SRC_ATTRS = ['data-src', 'data-lazy-src', 'data-original', 'data-lazy', 'data-srcset-src'];
-const LAZY_SRCSET_ATTRS = ['data-srcset', 'data-lazy-srcset'];
-const LAZY_BG_ATTRS = ['data-bg', 'data-background', 'data-bg-src', 'data-background-image', 'data-lazy-background'];
+import { LAZY_BG_ATTRS, LAZY_SRCSET_ATTRS, LAZY_SRC_ATTRS, isPlaceholderSrc } from '../utils/lazy-images';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -15,10 +12,6 @@ const absolute = (value: string, base: string): string => {
     return value;
   }
 };
-
-/** A 1px / inline placeholder that a lazy-loader replaces later */
-const isPlaceholderSrc = (src: string | null): boolean =>
-  !src || /^data:image\/(gif|svg\+xml|png);/i.test(src) || /(^|\/)(blank|placeholder|spacer|pixel|lazy)[^/]*\.(gif|png|svg|jpg)/i.test(src);
 
 /**
  * Collect every stylesheet in cascade order, following @import. Cross-origin sheets can't be read from the
