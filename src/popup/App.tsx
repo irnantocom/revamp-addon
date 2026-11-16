@@ -97,6 +97,7 @@ const App: React.FC = () => {
         {aiOpened.current && (
           <div className={activeTab === 'ai' ? 'h-full' : 'hidden'}>
             <AIChatBox
+              active={activeTab === 'ai'}
               inspector={inspector}
               selectedElement={selectedElement}
               onClear={() => setSelectedElement(null)}

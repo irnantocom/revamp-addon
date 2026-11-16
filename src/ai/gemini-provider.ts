@@ -5,10 +5,11 @@
 
 import { IAIProvider, AIMessage, AIResponse, AIProviderConfig, TranscribeRequest, TranscribeResponse } from './provider-interface';
 import { toGeminiRequest } from './message-format';
+import { DEFAULT_GEMINI_MODELS, describeGeminiError } from './gemini-models';
 
 export class GeminiProvider implements IAIProvider {
   name = 'Gemini';
-  models = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-pro'];
+  models = DEFAULT_GEMINI_MODELS;
 
   constructor(private config: AIProviderConfig) {}
 
@@ -48,7 +49,7 @@ export class GeminiProvider implements IAIProvider {
         const error = await response.json();
         return {
           success: false,
-          error: error.error?.message || 'Gemini API request failed',
+          error: describeGeminiError(error.error?.message || 'Gemini API request failed', model),
         };
       }
 

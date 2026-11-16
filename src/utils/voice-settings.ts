@@ -15,7 +15,7 @@ export const VOICE_PROVIDERS: VoiceProvider[] = ['openai', 'azure', 'gemini'];
 export const DEFAULT_VOICE_MODELS: Record<VoiceProvider, string> = {
   openai: 'whisper-1',
   azure: '',
-  gemini: 'gemini-2.5-flash',
+  gemini: 'gemini-3.5-flash',
 };
 
 export const VOICE_LANGUAGES: { tag: string; label: string }[] = [

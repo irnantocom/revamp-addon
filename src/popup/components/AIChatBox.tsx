@@ -24,6 +24,7 @@ import { ensureContentScript } from '../tab-messaging';
 import { InspectorControl } from '../use-inspector';
 import { useDictation } from '../use-dictation';
 import { joinDictation } from '../dictation';
+import { DEFAULT_GEMINI_MODELS } from '../../ai/gemini-models';
 import { DictationButton, DictationNotice } from './DictationButton';
 import AttachMenu, { type AttachMenuItem } from './AttachMenu';
 
@@ -60,9 +61,11 @@ interface Props {
   /** Text to put in the input box, e.g. coming from the Demo tab */
   initialPrompt?: string | null;
   onPromptConsumed?: () => void;
+  /** False while another tab is shown: the chat stays mounted, so the model list is refreshed when this turns true again */
+  active?: boolean;
 }
 
-const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initialPrompt, onPromptConsumed }) => {
+const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initialPrompt, onPromptConsumed, active = true }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -149,7 +152,7 @@ const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initi
     openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
     azure: [],
     claude: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
-    gemini: ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-1.5-pro', 'gemini-2.0-flash-exp'],
+    gemini: DEFAULT_GEMINI_MODELS,
     perplexity: ['llama-3.1-sonar-large-128k-online', 'llama-3.1-sonar-small-128k-online'],
     mistral: ['mistral-large-latest', 'mistral-small-latest', 'open-mistral-nemo'],
     cohere: ['command-r-plus', 'command-r', 'command'],
@@ -246,58 +249,63 @@ const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initi
     return () => chrome.storage.onChanged.removeListener(handleChange);
   }, []);
 
-  // Fetch models when provider changes
+  // Providers retire models without notice, so the list is asked for again each time the chat is shown,
+  // the provider changes, or the user presses refresh, instead of being kept for the whole session
+  const [refreshTick, setRefreshTick] = useState(0);
+  const wasActive = useRef(active);
   useEffect(() => {
+    if (active && !wasActive.current) setRefreshTick((t) => t + 1);
+    wasActive.current = active;
+  }, [active]);
+
+  useEffect(() => {
+    if (!provider || !apiKeys[provider]) return;
+
+    // A reply for a provider the user already left must not replace the list now on screen
+    let stale = false;
+    // Keeps the model the user picked when the new list still has it
+    const keepOrFirst = (list: string[]) => setModel((current) => (list.includes(current) ? current : list[0] || ''));
+
     const fetchModelsForProvider = async () => {
-      if (!provider || !apiKeys[provider]) return;
-
-      // A reload of the list (e.g. after Settings were saved) keeps the model the user picked
-      const keepOrFirst = (list: string[]) => setModel((current) => (list.includes(current) ? current : list[0] || ''));
-
-      // Check if we already have models for this provider
-      if (providerModels[provider] && providerModels[provider].length > 0) {
-        keepOrFirst(providerModels[provider]);
-        return;
-      }
-
       setLoadingModels(true);
       try {
         const response = await chrome.runtime.sendMessage({
           type: 'FETCH_MODELS',
           payload: { provider, apiKey: apiKeys[provider] }
         });
+        if (stale) return;
 
         if (response.success && response.data && response.data.length > 0) {
-          setProviderModels(prev => ({
-            ...prev,
-            [provider]: response.data
-          }));
+          setProviderModels(prev => ({ ...prev, [provider]: response.data }));
           keepOrFirst(response.data);
         } else {
-          // Fallback to defaults
-          const defaults = defaultModelOptions[provider] || [];
-          setProviderModels(prev => ({
-            ...prev,
-            [provider]: defaults
-          }));
-          setModel(defaults[0] || '');
+          // The fallback is shown but not remembered, so the next visit asks again
+          setProviderModels(prev => {
+            const next = { ...prev };
+            delete next[provider];
+            return next;
+          });
+          keepOrFirst(defaultModelOptions[provider] || []);
         }
       } catch (error) {
         console.error('[AI Chat] Failed to fetch models:', error);
-        // Fallback to defaults
-        const defaults = defaultModelOptions[provider] || [];
-        setProviderModels(prev => ({
-          ...prev,
-          [provider]: defaults
-        }));
-        setModel(defaults[0] || '');
+        if (stale) return;
+        setProviderModels(prev => {
+          const next = { ...prev };
+          delete next[provider];
+          return next;
+        });
+        keepOrFirst(defaultModelOptions[provider] || []);
       } finally {
-        setLoadingModels(false);
+        if (!stale) setLoadingModels(false);
       }
     };
 
     fetchModelsForProvider();
-  }, [provider, apiKeys, settingsVersion]);
+    return () => {
+      stale = true;
+    };
+  }, [provider, apiKeys, settingsVersion, refreshTick]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -595,7 +603,12 @@ const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initi
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: error instanceof EmptyReplyError ? error.message : `Error: ${error}. Please check your API key in Settings.`,
+        content: error instanceof EmptyReplyError
+          ? error.message
+          // A retired model is not a key problem; the hint would send people to the wrong place
+          : /no longer available from Google/.test(String(error))
+            ? String(error).replace(/^Error: /, '')
+            : `Error: ${error}. Please check your API key in Settings.`,
         timestamp: Date.now(),
       };
       // The request did not go through: give the draft back and keep the failed turn (and its files) out of the history
@@ -991,18 +1004,28 @@ const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initi
               value={model}
               onChange={(e) => setModel(e.target.value)}
               className="flex-1 text-xs border border-gray-300 rounded px-2 py-1"
-              disabled={loadingModels}
             >
-              {loadingModels ? (
-                <option value="">Loading models...</option>
-              ) : (
-                (providerModels[provider] || defaultModelOptions[provider] || []).map((m) => (
+              {(() => {
+                const list = providerModels[provider] || (loadingModels ? [] : defaultModelOptions[provider] || []);
+                // Nothing to show yet: say so instead of an empty dropdown. A refresh keeps the old list visible.
+                if (list.length === 0) return <option value="">{loadingModels ? 'Loading models...' : 'No models found'}</option>;
+                return list.map((m) => (
                   <option key={m} value={m}>
                     {m}
                   </option>
-                ))
-              )}
+                ));
+              })()}
             </select>
+            <button
+              type="button"
+              onClick={() => setRefreshTick((t) => t + 1)}
+              disabled={loadingModels}
+              aria-label="Refresh model list"
+              title="Refresh model list"
+              className="text-xs border border-gray-300 rounded px-2 py-1 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+            >
+              <span className={loadingModels ? 'inline-block animate-spin' : 'inline-block'} aria-hidden="true">↻</span>
+            </button>
           </div>
         )}
       </div>

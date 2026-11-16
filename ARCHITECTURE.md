@@ -237,7 +237,7 @@ Chat and demo are per browser tab. The panel and the content script learn their 
 
 ## 5. Message reference
 
-**Panel/content script → service worker:** `PING`, `GET_SETTINGS`, `UPDATE_SETTINGS`, `AI_REQUEST`, `FETCH_MODELS`, `VALIDATE_API_KEY`, `CAPTURE_VISIBLE_TAB`, `INJECT_CONTENT_SCRIPT`, `GET_TAB_ID` (reply `{ success, data: tabId }`; `success: false` when the sender has no tab), `TRANSCRIBE_AUDIO` (payload `{ audioBase64, mimeType: 'audio/wav' }`, reply `{ data: { text } }`; the provider and model come from `settings.voice`, not from the request; audio is not stored and not counted in `tokenUsage`).
+**Panel/content script → service worker:** `PING`, `GET_SETTINGS`, `UPDATE_SETTINGS`, `AI_REQUEST`, `FETCH_MODELS` (the chat sends it each time it is shown, the provider changes or the user presses refresh; it is never cached, and when the provider list cannot be fetched the reply holds a fallback list), `VALIDATE_API_KEY`, `CAPTURE_VISIBLE_TAB`, `INJECT_CONTENT_SCRIPT`, `GET_TAB_ID` (reply `{ success, data: tabId }`; `success: false` when the sender has no tab), `TRANSCRIBE_AUDIO` (payload `{ audioBase64, mimeType: 'audio/wav' }`, reply `{ data: { text } }`; the provider and model come from `settings.voice`, not from the request; audio is not stored and not counted in `tokenUsage`).
 
 **Panel → content script** (via `chrome.tabs.sendMessage`):
 

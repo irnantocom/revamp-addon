@@ -40,7 +40,7 @@ Selecting an element does not switch tabs; the user stays where they are. A note
 | Tab | Purpose | Key elements |
 |-----|---------|--------------|
 | **Editor** | Choose an element and edit it by hand | Inspector toggle (⊕ Inspector / ⊗ Stop) in the header, also shown when nothing is selected; element summary (tag, selector, selector type), text editor, attribute picker and value, CSS fields, undo. Hover shows a blue overlay with a label; click selects. |
-| **AI Chat** | Natural-language changes | Inspector toggle, provider/model picker, scope badge (whole page or selected element, with clear button), message list, attachment chips, one rounded input box (text on top; + attach at the bottom left; microphone and a round blue send arrow at the bottom right), change preview list. |
+| **AI Chat** | Natural-language changes | Inspector toggle, provider/model picker with a refresh button (the model list is fetched again whenever the tab is shown), scope badge (whole page or selected element, with clear button), message list, attachment chips, one rounded input box (text on top; + attach at the bottom left; microphone and a round blue send arrow at the bottom right), change preview list. |
 | **Demo** | Manage the demo | Demo name and on/off switch, Sections, Changes, Notes, Versions, Share, Present, Handoff. |
 | **Export** | Static copy | Option checkboxes, Export button, progress text, report of downloaded, failed and skipped assets. |
 | **Settings** | Providers | API key per provider (masked, show/hide), Azure endpoint, API version, deployment names (comma-separated; each one is a model in AI Chat, the connection test uses the first), key validation, model list. |

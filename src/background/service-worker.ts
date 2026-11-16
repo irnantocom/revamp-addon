@@ -6,6 +6,7 @@
 import { OpenAIProvider } from '../ai/openai-provider';
 import { ClaudeProvider } from '../ai/claude-provider';
 import { GeminiProvider } from '../ai/gemini-provider';
+import { DEFAULT_GEMINI_MODELS, pickGeminiModels } from '../ai/gemini-models';
 import { AzureOpenAIProvider, parseAzureDeployments, pickAzureDeployment } from '../ai/azure-openai-provider';
 import type { AIRequest } from '../ai/provider-interface';
 import { assertAudioSize, assertPayloadSize } from './payload-guard';
@@ -481,29 +482,13 @@ async function fetchOpenAIModels(apiKey: string): Promise<string[]> {
 async function fetchGeminiModels(apiKey: string): Promise<string[]> {
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+      `https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=${apiKey}`
     );
 
     if (!response.ok) return getDefaultModels('gemini');
 
-    const data = await response.json();
-    // Filter for generateContent-supported models
-    const geminiModels = data.models
-      .filter((m: any) => 
-        m.name.includes('gemini') && 
-        m.supportedGenerationMethods?.includes('generateContent')
-      )
-      .map((m: any) => m.name.replace('models/', ''))
-      .sort((a: string, b: string) => {
-        // Prioritize newer/flash models
-        if (a.includes('flash')) return -1;
-        if (b.includes('flash')) return 1;
-        if (a.includes('2.0')) return -1;
-        if (b.includes('2.0')) return 1;
-        return a.localeCompare(b);
-      });
-
-    return geminiModels.length > 0 ? geminiModels : getDefaultModels('gemini');
+    const models = pickGeminiModels(await response.json());
+    return models.length > 0 ? models : getDefaultModels('gemini');
   } catch {
     return getDefaultModels('gemini');
   }
@@ -570,7 +555,7 @@ function getDefaultModels(provider: string): string[] {
     openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
     azure: [],
     claude: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
-    gemini: ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-2.0-flash-exp'],
+    gemini: DEFAULT_GEMINI_MODELS,
     perplexity: ['llama-3.1-sonar-large-128k-online', 'llama-3.1-sonar-small-128k-online'],
     mistral: ['mistral-large-latest', 'mistral-small-latest', 'open-mistral-nemo'],
     cohere: ['command-r-plus', 'command-r', 'command'],
