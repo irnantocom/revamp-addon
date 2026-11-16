@@ -1,4 +1,15 @@
 import React, { useState, useEffect } from 'react';
+import {
+  DEFAULT_VOICE_MODELS,
+  VOICE_LANGUAGES,
+  VOICE_PROVIDERS,
+  defaultVoiceSettings,
+  normalizeVoiceSettings,
+  type VoiceProvider,
+  type VoiceSettings,
+} from '../../utils/voice-settings';
+import { providerLabel } from '../../ai/capabilities';
+import { openMicPermissionPage } from '../dictation';
 
 interface AzureConfig {
   endpoint: string;
@@ -25,6 +36,7 @@ const Settings: React.FC = () => {
     apiVersion: '2024-12-01-preview',
     deployment: '',
   });
+  const [voice, setVoice] = useState<VoiceSettings>(defaultVoiceSettings);
   const [azureTest, setAzureTest] = useState<{ busy: boolean; ok?: boolean; message?: string }>({ busy: false });
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
@@ -38,6 +50,9 @@ const Settings: React.FC = () => {
       const response = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
       if (response.success && response.data.apiKeys) {
         setApiKeys(response.data.apiKeys);
+      }
+      if (response.success) {
+        setVoice(normalizeVoiceSettings(response.data.voice));
       }
       if (response.success && response.data.azure) {
         setAzure((prev) => ({ ...prev, ...response.data.azure }));
@@ -55,6 +70,7 @@ const Settings: React.FC = () => {
         payload: {
           apiKeys,
           azure,
+          voice,
         },
       });
 
@@ -75,7 +91,7 @@ const Settings: React.FC = () => {
   const testAzure = async () => {
     setAzureTest({ busy: true });
     try {
-      await chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', payload: { apiKeys, azure } });
+      await chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', payload: { apiKeys, azure, voice } });
       const response = await chrome.runtime.sendMessage({
         type: 'VALIDATE_API_KEY',
         payload: { provider: 'azure', apiKey: apiKeys.azure || '' },
@@ -191,6 +207,97 @@ const Settings: React.FC = () => {
             )}
           </div>
         ))}
+      </div>
+
+      {/* Voice */}
+      <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900 mb-1">Voice dictation</h2>
+          <p className="text-xs text-gray-600">
+            The microphone button in AI Chat and in notes types what you say. Nothing is sent until you send or save.
+          </p>
+        </div>
+        <label className="flex items-start gap-2 text-sm text-gray-800 cursor-pointer">
+          <input
+            type="radio"
+            name="voice-engine"
+            className="mt-1"
+            checked={voice.engine === 'browser'}
+            onChange={() => setVoice((prev) => ({ ...prev, engine: 'browser' }))}
+          />
+          <span>
+            Chrome speech recognition
+            <span className="block text-xs text-gray-500">
+              Free, no key needed. Chrome sends the audio to Google's speech service.
+            </span>
+          </span>
+        </label>
+        <label className="flex items-start gap-2 text-sm text-gray-800 cursor-pointer">
+          <input
+            type="radio"
+            name="voice-engine"
+            className="mt-1"
+            checked={voice.engine === 'provider'}
+            onChange={() => setVoice((prev) => ({ ...prev, engine: 'provider' }))}
+          />
+          <span>
+            AI provider
+            <span className="block text-xs text-gray-500">
+              Records a clip and sends it to the provider below with your API key. Claude cannot transcribe audio.
+            </span>
+          </span>
+        </label>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Language</label>
+          <select
+            value={voice.language}
+            onChange={(e) => setVoice((prev) => ({ ...prev, language: e.target.value }))}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+          >
+            {VOICE_LANGUAGES.map((l) => (
+              <option key={l.tag} value={l.tag}>{l.label}</option>
+            ))}
+          </select>
+        </div>
+        <button
+          type="button"
+          onClick={openMicPermissionPage}
+          className="w-full border border-gray-300 rounded-lg py-2 text-sm hover:bg-gray-50"
+        >
+          Allow microphone
+        </button>
+        <p className="text-xs text-gray-500">
+          Use this once if the microphone button says access is blocked. Chrome shows its permission prompt in a new tab.
+        </p>
+        {voice.engine === 'provider' && (
+          <div className="space-y-2">
+            <select
+              value={voice.provider}
+              onChange={(e) => {
+                const provider = e.target.value as VoiceProvider;
+                setVoice((prev) => ({ ...prev, provider, model: DEFAULT_VOICE_MODELS[provider] }));
+              }}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+              aria-label="Transcription provider"
+            >
+              {VOICE_PROVIDERS.map((p) => (
+                <option key={p} value={p}>{providerLabel(p)}</option>
+              ))}
+            </select>
+            <input
+              type="text"
+              value={voice.model}
+              onChange={(e) => setVoice((prev) => ({ ...prev, model: e.target.value }))}
+              placeholder={voice.provider === 'azure' ? 'Transcription deployment name (a Whisper deployment)' : 'Transcription model'}
+              aria-label={voice.provider === 'azure' ? 'Transcription deployment' : 'Transcription model'}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+            <p className="text-xs text-gray-500">
+              Uses the API key above{voice.provider === 'azure' ? ', plus the Azure endpoint and API version' : ''}.
+              Recordings stop after 2 minutes and are not stored.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Save Button */}

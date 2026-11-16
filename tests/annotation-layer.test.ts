@@ -92,3 +92,70 @@ describe('AnnotationLayer', () => {
     expect(document.querySelector('[data-revamp-ui] textarea')).toBeNull();
   });
 });
+
+describe('AnnotationLayer note dictation', () => {
+  const open = (dictation?: { toggle: () => void; cancel: () => void }) => {
+    const layer = make([]);
+    layer.openPopover(document.querySelector('h1')!, 'Existing', { onSave: vi.fn(), dictation });
+    const textarea = document.querySelector<HTMLTextAreaElement>('[data-revamp-ui] textarea')!;
+    const mic = document.querySelector<HTMLButtonElement>('[aria-label="Dictate with your voice"]');
+    return { layer, textarea, mic };
+  };
+
+  it('shows the microphone only when the panel can listen', () => {
+    expect(open().mic).toBeNull();
+    expect(open({ toggle: vi.fn(), cancel: vi.fn() }).mic).not.toBeNull();
+  });
+
+  it('appends dictated text to what was already written and locks the field while listening', () => {
+    const dictation = { toggle: vi.fn(), cancel: vi.fn() };
+    const { layer, textarea, mic } = open(dictation);
+
+    mic!.click();
+    expect(dictation.toggle).toHaveBeenCalledTimes(1);
+
+    layer.applyDictation({ kind: 'state', state: 'listening' });
+    expect(textarea.readOnly).toBe(true);
+    layer.applyDictation({ kind: 'text', text: 'new words', final: false });
+    expect(textarea.value).toBe('Existing new words');
+    layer.applyDictation({ kind: 'text', text: 'new words now', final: true });
+    layer.applyDictation({ kind: 'state', state: 'idle' });
+
+    expect(textarea.value).toBe('Existing new words now');
+    expect(textarea.readOnly).toBe(false);
+  });
+
+  it('shows an error and cancels a running dictation when the popover closes', () => {
+    const dictation = { toggle: vi.fn(), cancel: vi.fn() };
+    const { layer } = open(dictation);
+
+    layer.applyDictation({ kind: 'state', state: 'error', error: 'Microphone access is blocked.' });
+    expect(document.querySelector('[role="status"]')!.textContent).toContain('blocked');
+
+    layer.applyDictation({ kind: 'state', state: 'listening' });
+    layer.closePopover();
+    expect(dictation.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores events when no popover is open', () => {
+    expect(() => make([]).applyDictation({ kind: 'text', text: 'x', final: true })).not.toThrow();
+  });
+});
+
+describe('AnnotationLayer popover size', () => {
+  const popoverWidth = () => document.querySelector<HTMLElement>('[data-revamp-ui] textarea')!.parentElement!.style.width;
+
+  it('is wide enough for the button row and counts its padding inside the width', () => {
+    Object.defineProperty(document.documentElement, 'clientWidth', { configurable: true, value: 1024 });
+    make([]).openPopover(document.querySelector('h1')!, '', { onSave: vi.fn() });
+    const popover = document.querySelector<HTMLElement>('[data-revamp-ui] textarea')!.parentElement!;
+    expect(popoverWidth()).toBe('380px');
+    expect(popover.style.boxSizing).toBe('border-box');
+  });
+
+  it('shrinks to fit a narrow window', () => {
+    Object.defineProperty(document.documentElement, 'clientWidth', { configurable: true, value: 320 });
+    make([]).openPopover(document.querySelector('h1')!, '', { onSave: vi.fn() });
+    expect(popoverWidth()).toBe('304px');
+  });
+});

@@ -40,17 +40,23 @@ Selecting an element does not switch tabs; the user stays where they are. A note
 | Tab | Purpose | Key elements |
 |-----|---------|--------------|
 | **Editor** | Choose an element and edit it by hand | Inspector toggle (⊕ Inspector / ⊗ Stop) in the header, also shown when nothing is selected; element summary (tag, selector, selector type), text editor, attribute picker and value, CSS fields, undo. Hover shows a blue overlay with a label; click selects. |
-| **AI Chat** | Natural-language changes | Inspector toggle, provider/model picker, scope badge (whole page or selected element, with clear button), message list, attachment chips, input with a paperclip, change preview list. |
+| **AI Chat** | Natural-language changes | Inspector toggle, provider/model picker, scope badge (whole page or selected element, with clear button), message list, attachment chips, one rounded input box (text on top; + attach at the bottom left; microphone and a round blue send arrow at the bottom right), change preview list. |
 | **Demo** | Manage the demo | Demo name and on/off switch, Sections, Changes, Notes, Versions, Share, Present, Handoff. |
 | **Export** | Static copy | Option checkboxes, Export button, progress text, report of downloaded, failed and skipped assets. |
 | **Settings** | Providers | API key per provider (masked, show/hide), Azure endpoint, API version, deployment names (comma-separated; each one is a model in AI Chat, the connection test uses the first), key validation, model list. |
 | **Tokens** | Token usage of AI requests | Range switch (Today, Last 7 days, All), totals (requests, input, output, total), table per model, latest 50 requests with time and page, Clear history (with confirmation). Counts as the provider reports them; no prices. |
 
 ### Attachments in AI Chat
-- **Attach:** paperclip next to the input (the file dialog lists only what the chosen provider can use), drag files onto the chat (a blue ring shows the drop target), or paste an image into the input. Up to 5 files per message.
+- **Attach:** the + button at the bottom left of the input box opens a small menu above it (closes on Escape, outside click or after a choice); it has one entry, "Add photos & files — Upload from computer", which opens the file dialog; more sources are added as items in `AIChatBox.tsx` (`attachMenuItems`) (the file dialog lists only what the chosen provider can use), drag files onto the chat (a blue ring shows the drop target), or paste an image into the input. Up to 5 files per message.
 - **Chips:** each file is a chip above the input with a thumbnail or a PDF/VID/DOC badge, its name (truncated, full name in the tooltip) and size; "Reading..." while it is processed; a red chip with the reason when it is refused (unsupported type, too large, empty, damaged). The × removes a chip. Send is disabled while a file is still being read, and enabled with only files and no text.
 - **Privacy line:** "Files are sent to <provider>." appears under the chips.
 - **In messages:** sent files stay as read-only chips inside the user's bubble. If a file could not be sent as attached (the provider does not accept it, it is no longer stored, or the request was too large) a small grey list of notes appears under the reply.
+
+### Voice dictation
+- **Microphone button** sits at the bottom right of the AI Chat input box, left of the send arrow, and left of Save in the note popover. Idle: grey icon. Listening: red icon on a light red circle (pulsing in AI Chat). Transcribing: small spinner, disabled.
+- **Behaviour:** spoken text is appended after what is already typed; the field is read-only while listening so incoming text cannot overwrite typing; Send/Save stay in the user's hands (Send is disabled until the microphone is off). A status line under the field says "Listening… press the microphone again to stop." or "Transcribing…".
+- **Errors:** shown in red under the field with the cause (blocked microphone, no microphone, service unreachable, no speech recognised, missing API key). A blocked microphone adds an "Allow microphone" link in AI Chat; the note popover points to Settings > Voice.
+- **Settings > Voice:** radio choice between Chrome speech recognition and AI provider, each with a one-line statement of where the audio goes; language select; provider, model or deployment fields only for the provider engine.
 
 ### AI change preview
 Each proposed operation is a row: checkbox, description, the AI's short reason, eye icon.

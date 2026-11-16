@@ -12,6 +12,7 @@ npm run build
 # Copy manifest and assets
 cp public/manifest.json dist/
 cp -r public/icons dist/ 2>/dev/null || echo "Note: Add icon files to public/icons/"
+cp -r public/mic-permission dist/
 
 # Move popup HTML to correct location
 if [ -f dist/src/popup/index.html ]; then

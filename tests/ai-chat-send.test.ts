@@ -20,7 +20,7 @@ const settle = async () => {
 };
 
 const textarea = () => container.querySelector('textarea')!;
-const sendButton = () => Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Send')!;
+const sendButton = () => Array.from(container.querySelectorAll('button')).find((b) => b.getAttribute('aria-label') === 'Send message')!;
 const draftChips = () => Array.from(container.querySelectorAll('.border-t li'));
 const messageChips = () => Array.from(container.querySelectorAll('.overflow-y-auto li'));
 

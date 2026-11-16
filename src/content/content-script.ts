@@ -10,7 +10,7 @@ import { changeManager } from '../utils/change-manager';
 import { pageIndex } from '../utils/page-index';
 import { DemoManager } from '../utils/demo-manager';
 import { captureScreenshot, downloadBlob } from '../utils/screenshot';
-import { AnnotationLayer } from '../utils/annotation-layer';
+import { AnnotationLayer, type PopoverDictation } from '../utils/annotation-layer';
 import { capturePageSnapshot } from '../export/snapshot';
 import { ExportOptions } from '../export/types';
 import { Annotation } from '../types/demo';
@@ -172,6 +172,11 @@ class RevampInspector {
 
         case 'ANNOTATION_ADD':
           void this.addAnnotation();
+          sendResponse({ success: true });
+          break;
+
+        case 'VOICE_NOTE_EVENT':
+          if (message.payload) this.annotations.applyDictation(message.payload);
           sendResponse({ success: true });
           break;
 
@@ -433,6 +438,8 @@ class RevampInspector {
     // Create iframe for popup
     const iframe = document.createElement('iframe');
     iframe.src = chrome.runtime.getURL('popup/index.html');
+    // Without this the panel cannot use the microphone for dictation
+    iframe.allow = 'microphone';
     iframe.style.cssText = `
       width: 100%;
       height: calc(100% - 30px);
@@ -983,8 +990,19 @@ class RevampInspector {
     if (!el) return;
 
     this.annotations.openPopover(el, '', {
+      dictation: this.noteDictation(),
       onSave: (text) => this.demo.addAnnotation(el, text),
     });
+  }
+
+  /** The microphone belongs to the panel (this page's origin cannot ask for it), so dictation needs it open */
+  private noteDictation(): PopoverDictation | undefined {
+    if (!this.panelOpen) return undefined;
+    const send = (type: string) => {
+      // The panel answers through VOICE_NOTE_EVENT; a closed panel simply has no listener
+      chrome.runtime.sendMessage({ type }).catch(() => {});
+    };
+    return { toggle: () => send('VOICE_NOTE_TOGGLE'), cancel: () => send('VOICE_NOTE_CANCEL') };
   }
 
   private editAnnotation(annotation: Annotation): void {
@@ -993,6 +1011,7 @@ class RevampInspector {
     el.scrollIntoView({ block: 'center', behavior: 'smooth' });
 
     this.annotations.openPopover(el, annotation.text, {
+      dictation: this.noteDictation(),
       resolved: annotation.resolved,
       onSave: (text) => this.demo.updateAnnotation(annotation.id, { text }),
       onToggleResolved: () => this.demo.updateAnnotation(annotation.id, { resolved: !annotation.resolved }),

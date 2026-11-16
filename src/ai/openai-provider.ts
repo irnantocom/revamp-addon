@@ -3,7 +3,8 @@
  * Implements IAIProvider for OpenAI API
  */
 
-import { IAIProvider, AIMessage, AIResponse, AIProviderConfig } from './provider-interface';
+import { IAIProvider, AIMessage, AIResponse, AIProviderConfig, TranscribeRequest, TranscribeResponse } from './provider-interface';
+import { audioFormData } from './transcription';
 import { toOpenAIMessages } from './message-format';
 
 export class OpenAIProvider implements IAIProvider {
@@ -93,6 +94,23 @@ export class OpenAIProvider implements IAIProvider {
         success: false,
         error: `OpenAI request failed: ${error}`,
       };
+    }
+  }
+
+  async transcribeAudio(request: TranscribeRequest): Promise<TranscribeResponse> {
+    try {
+      const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${this.config.apiKey}` },
+        body: audioFormData(request, true),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        return { success: false, error: data.error?.message || `OpenAI transcription failed (HTTP ${response.status})` };
+      }
+      return { success: true, text: String(data.text ?? '').trim() };
+    } catch (error) {
+      return { success: false, error: `OpenAI transcription failed: ${error}` };
     }
   }
 

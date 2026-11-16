@@ -20,6 +20,11 @@ export function getCapabilities(provider: string): ProviderCapabilities {
 
 const LABELS: Record<string, string> = { openai: 'OpenAI', azure: 'Azure OpenAI', claude: 'Claude', gemini: 'Gemini' };
 
+/** Providers whose adapter can turn speech into text (Claude has no audio input) */
+export function canTranscribe(provider: string): boolean {
+  return provider === 'openai' || provider === 'azure' || provider === 'gemini';
+}
+
 export function providerLabel(provider: string): string {
   return LABELS[provider] ?? provider;
 }

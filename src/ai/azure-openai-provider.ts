@@ -3,7 +3,8 @@
  * Implements IAIProvider for Azure OpenAI deployments (custom endpoint)
  */
 
-import { IAIProvider, AIMessage, AIResponse, AIProviderConfig } from './provider-interface';
+import { IAIProvider, AIMessage, AIResponse, AIProviderConfig, TranscribeRequest, TranscribeResponse } from './provider-interface';
+import { audioFormData } from './transcription';
 import { toOpenAIMessages } from './message-format';
 
 export interface AzureOpenAIConfig extends AIProviderConfig {
@@ -43,7 +44,7 @@ export class AzureOpenAIProvider implements IAIProvider {
     }
   ): Promise<AIResponse> {
     try {
-      const { url, deployment } = this.buildRequest(model);
+      const { url, deployment } = this.buildRequest(model, 'chat/completions');
       let tokenParam: 'max_tokens' | 'max_completion_tokens' = 'max_tokens';
       let sendTemperature = true;
       let tokenLimit = options?.maxTokens ?? 2000;
@@ -121,13 +122,36 @@ export class AzureOpenAIProvider implements IAIProvider {
     }
   }
 
+  /** `request.model` is the transcription deployment (a Whisper or transcribe model), not a chat one */
+  async transcribeAudio(request: TranscribeRequest): Promise<TranscribeResponse> {
+    try {
+      const { url } = this.buildRequest(request.model, 'audio/transcriptions', true);
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'api-key': this.config.apiKey.trim() },
+        body: audioFormData(request, false),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        return {
+          success: false,
+          error: `${data.error?.message || 'Azure OpenAI transcription failed'} (HTTP ${response.status}). Check that "${request.model}" is a transcription deployment (Whisper) in this resource.`,
+        };
+      }
+      return { success: true, text: String(data.text ?? '').trim() };
+    } catch (error) {
+      return { success: false, error: `Azure OpenAI transcription failed: ${error}` };
+    }
+  }
+
   /**
    * Build the request URL. Accepts a bare resource endpoint, but also copes with a pasted
    * full request URL (".../openai/deployments/<name>/chat/completions?api-version=...").
    */
-  private buildRequest(model: string): { url: string; deployment: string } {
+  private buildRequest(model: string, operation: string, preferModel = false): { url: string; deployment: string } {
     let endpoint = this.config.endpoint.trim();
-    let deployment = (this.config.deployment || model || '').trim();
+    // Chat uses the configured deployment; transcription names its own (a different model)
+    let deployment = (preferModel ? model || this.config.deployment : this.config.deployment || model || '').trim();
     let apiVersion = this.config.apiVersion.trim();
 
     // Keep any path before "/openai": gateways such as API Management serve the API under a
@@ -141,7 +165,7 @@ export class AzureOpenAIProvider implements IAIProvider {
     }
 
     return {
-      url: `${endpoint.replace(/\/+$/, '')}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${encodeURIComponent(apiVersion)}`,
+      url: `${endpoint.replace(/\/+$/, '')}/openai/deployments/${encodeURIComponent(deployment)}/${operation}?api-version=${encodeURIComponent(apiVersion)}`,
       deployment,
     };
   }

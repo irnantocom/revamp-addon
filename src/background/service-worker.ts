@@ -8,7 +8,8 @@ import { ClaudeProvider } from '../ai/claude-provider';
 import { GeminiProvider } from '../ai/gemini-provider';
 import { AzureOpenAIProvider, parseAzureDeployments, pickAzureDeployment } from '../ai/azure-openai-provider';
 import type { AIRequest } from '../ai/provider-interface';
-import { assertPayloadSize } from './payload-guard';
+import { assertAudioSize, assertPayloadSize } from './payload-guard';
+import { languageHint, normalizeVoiceSettings } from '../utils/voice-settings';
 import { purgeTabState } from './tab-state';
 import { recordTokenUsage, usageRecord } from '../utils/token-usage';
 
@@ -130,6 +131,15 @@ chrome.runtime.onMessage.addListener(
       case 'INJECT_CONTENT_SCRIPT':
         handleInjectContentScript(sender.tab?.id, sendResponse);
         return true;
+
+      case 'TRANSCRIBE_AUDIO':
+        handleTranscribeAudio(message.payload, sendResponse);
+        return true;
+
+      case 'VOICE_NOTE_TOGGLE':
+      case 'VOICE_NOTE_CANCEL':
+        // Answered by the panel (the page cannot reach the microphone); replying here would win the race
+        return false;
 
       default:
         sendResponse({ success: false, error: 'Unknown message type' });
@@ -265,6 +275,71 @@ async function handleAIRequest(
 }
 
 // Inject content script dynamically
+// Speech to text with the provider chosen in Settings (voice.provider/voice.model)
+async function handleTranscribeAudio(
+  payload: { audioBase64?: unknown; mimeType?: unknown } | undefined,
+  sendResponse: (response: MessageResponse) => void
+) {
+  try {
+    const tooLarge = assertAudioSize(payload?.audioBase64);
+    if (tooLarge) {
+      sendResponse({ success: false, error: tooLarge });
+      return;
+    }
+    if (payload?.mimeType !== 'audio/wav') {
+      sendResponse({ success: false, error: 'Unsupported audio format.' });
+      return;
+    }
+
+    const { settings } = await chrome.storage.local.get('settings');
+    const voice = normalizeVoiceSettings(settings?.voice);
+    const apiKey = settings?.apiKeys?.[voice.provider];
+    if (!apiKey) {
+      sendResponse({ success: false, error: `No API key configured for ${voice.provider}. Add it in Settings.` });
+      return;
+    }
+    if (!voice.model) {
+      sendResponse({
+        success: false,
+        error: voice.provider === 'azure'
+          ? 'Set the transcription deployment name in Settings > Voice.'
+          : 'Set the transcription model in Settings > Voice.',
+      });
+      return;
+    }
+
+    let provider;
+    switch (voice.provider) {
+      case 'openai':
+        provider = new OpenAIProvider({ apiKey });
+        break;
+      case 'gemini':
+        provider = new GeminiProvider({ apiKey });
+        break;
+      case 'azure': {
+        const azure = settings?.azure || {};
+        if (!azure.endpoint || !azure.apiVersion) {
+          sendResponse({ success: false, error: 'Azure OpenAI endpoint and API version must be set in Settings.' });
+          return;
+        }
+        provider = new AzureOpenAIProvider({ apiKey, endpoint: azure.endpoint, apiVersion: azure.apiVersion, deployment: voice.model });
+        break;
+      }
+    }
+
+    const result = await provider.transcribeAudio({
+      audioBase64: payload!.audioBase64 as string,
+      mimeType: 'audio/wav',
+      model: voice.model,
+      language: languageHint(voice.language),
+    });
+    if (result.success) sendResponse({ success: true, data: { text: result.text ?? '' } });
+    else sendResponse({ success: false, error: result.error || 'Transcription failed' });
+  } catch (error) {
+    sendResponse({ success: false, error: `Transcription failed: ${error instanceof Error ? error.message : String(error)}` });
+  }
+}
+
 async function handleInjectContentScript(
   tabId: number | undefined,
   sendResponse: (response: MessageResponse) => void

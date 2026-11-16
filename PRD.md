@@ -56,7 +56,7 @@ Priority: **P0** required for the product to work, **P1** expected, **P2** later
 | F8 | Provider-agnostic adapter; work with OpenAI, Azure OpenAI, Claude, Gemini | P0 | Done |
 | F9 | Full text of elements is sent so rewrite and translation cover everything; refuse to rewrite text the AI cannot see in full | P1 | Done |
 | F10 | Perplexity, Mistral, Cohere, Groq, OpenRouter adapters | P2 | Not started (keys can be entered, requests fail with "not yet implemented") |
-| F23 | Attach images, PDFs and text documents (TXT, MD, CSV, JSON, HTML, DOCX) to the AI chat as context that stays with the conversation; paperclip, drag and drop, paste | P1 | Done |
+| F23 | Attach images, PDFs and text documents (TXT, MD, CSV, JSON, HTML, DOCX) to the AI chat as context that stays with the conversation; + button, drag and drop, paste | P1 | Done |
 | F24 | Attach videos (MP4, WebM), sent to the AI as sampled still frames | P1 | Done |
 
 ### Demo management
@@ -69,6 +69,7 @@ Priority: **P0** required for the product to work, **P1** expected, **P2** later
 | F15 | Share as JSON file or text code; import from either | P1 | Done |
 | F16 | Notes pinned to elements; turn open notes into an AI request | P1 | Done |
 | F17 | Presentation mode (hide extension UI); viewport and full-page screenshots | P1 | Done |
+| F25 | Voice dictation into the AI chat input and note editor (text appears for review, never sent automatically); engine chosen in Settings: Chrome speech recognition or transcription by OpenAI, Azure OpenAI or Gemini | P1 | Done (needs a manual check in Chrome) |
 
 ### Output
 | ID | Requirement | Pri | Status |

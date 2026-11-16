@@ -3,7 +3,7 @@
  * Implements IAIProvider for Google Gemini API
  */
 
-import { IAIProvider, AIMessage, AIResponse, AIProviderConfig } from './provider-interface';
+import { IAIProvider, AIMessage, AIResponse, AIProviderConfig, TranscribeRequest, TranscribeResponse } from './provider-interface';
 import { toGeminiRequest } from './message-format';
 
 export class GeminiProvider implements IAIProvider {
@@ -189,6 +189,44 @@ export class GeminiProvider implements IAIProvider {
         success: false,
         error: `Gemini request failed: ${error instanceof Error ? error.message : String(error)}`,
       };
+    }
+  }
+
+  async transcribeAudio(request: TranscribeRequest): Promise<TranscribeResponse> {
+    try {
+      const language = request.language ? ` The speaker is probably using the language with ISO code "${request.language}".` : '';
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(request.model)}:generateContent`,
+        {
+          method: 'POST',
+          // Key in a header, not the URL, so it does not end up in error messages
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.config.apiKey },
+          body: JSON.stringify({
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    text:
+                      'Transcribe this audio exactly as spoken, in the language spoken. Reply with the transcript only: no quotes, no commentary, no translation.' +
+                      language,
+                  },
+                  { inlineData: { mimeType: request.mimeType, data: request.audioBase64 } },
+                ],
+              },
+            ],
+            generationConfig: { temperature: 0 },
+          }),
+        }
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        return { success: false, error: data.error?.message || `Gemini transcription failed (HTTP ${response.status})` };
+      }
+      const parts: any[] = data.candidates?.[0]?.content?.parts ?? [];
+      return { success: true, text: parts.map((p) => p.text ?? '').join('').trim() };
+    } catch (error) {
+      return { success: false, error: `Gemini transcription failed: ${error}` };
     }
   }
 

@@ -50,7 +50,10 @@ The panel talks to the page through `sendToTab` ([src/popup/tab-messaging.ts](sr
 | [src/utils/locator.ts](src/utils/locator.ts) | Durable element description that survives reloads. |
 | [src/utils/demo-manager.ts](src/utils/demo-manager.ts) | Persist, restore, toggle, reset, import/export a demo; owns annotations. |
 | [src/utils/demo-versions.ts](src/utils/demo-versions.ts) | Named versions, diff between versions, operation descriptions. |
-| [src/utils/annotation-layer.ts](src/utils/annotation-layer.ts) | Numbered note pins drawn over the page. |
+| [src/utils/annotation-layer.ts](src/utils/annotation-layer.ts) | Numbered note pins drawn over the page; the note popover, with a microphone button when the panel is open. |
+| [src/popup/dictation.ts](src/popup/dictation.ts), [use-dictation.ts](src/popup/use-dictation.ts), [components/NoteDictationBridge.tsx](src/popup/components/NoteDictationBridge.tsx) | Voice dictation. `dictation.ts` has both engines (Chrome speech recognition; MediaRecorder with transcription through the service worker); the hook feeds the chat input; the bridge serves the note popover on the page. |
+| [src/utils/voice-settings.ts](src/utils/voice-settings.ts), [wav-encoder.ts](src/utils/wav-encoder.ts) | `settings.voice` validation and defaults; 16 kHz mono WAV encoder for the clip sent to a provider. |
+| [public/mic-permission/](public/mic-permission) | Plain page the panel opens in a tab so Chrome can ask for the microphone once (`build.sh` copies it to `dist/`). |
 | [src/utils/selector-generator.ts](src/utils/selector-generator.ts) | Stable selectors (data-* > id > CSS path > XPath). |
 | [src/utils/highlight-overlay.ts](src/utils/highlight-overlay.ts) | Hover/pick/preview overlays that never touch the page's own styles. |
 | [src/utils/prompt-builder.ts](src/utils/prompt-builder.ts) | System prompt with the page index, the theme variables, a named site's design and the operation catalog; adds the attached-files rules when files are attached. |
@@ -123,7 +126,7 @@ Not covered: sections left out of a document that is attached to a selected elem
 
 ### Chat attachments
 
-The AI Chat tab accepts images, PDFs, videos and text documents as context (paperclip, drag and drop, or paste).
+The AI Chat tab accepts images, PDFs, videos and text documents as context (the + button, drag and drop, or paste).
 
 ```
 file → readAttachment (panel)        → StoredAttachment { meta, parts[], bytes }
@@ -226,7 +229,7 @@ Chat and demo are per browser tab. The panel and the content script learn their 
 
 | Storage key (`chrome.storage.local`) | Value |
 |-----|------|
-| `settings` | `{ aiProvider, apiKeys, azure: { endpoint, apiVersion, deployment }, ... }`. `azure.deployment` is one or more deployment names separated by commas or new lines (`parseAzureDeployments`); `FETCH_MODELS` returns them as Azure's models, `AI_REQUEST` uses the chat's model when it is one of them and the first otherwise (`pickAzureDeployment`), and the connection test uses the first. Azure has no deployment list reachable with an API key, so the names must be typed in. `apiVersion` is sent as the `api-version` query parameter of every Azure request |
+| `settings` | `{ aiProvider, apiKeys, azure: { endpoint, apiVersion, deployment }, ... }`. `azure.deployment` is one or more deployment names separated by commas or new lines (`parseAzureDeployments`); `FETCH_MODELS` returns them as Azure's models, `AI_REQUEST` uses the chat's model when it is one of them and the first otherwise (`pickAzureDeployment`), and the connection test uses the first. Azure has no deployment list reachable with an API key, so the names must be typed in. `apiVersion` is sent as the `api-version` query parameter of every Azure request. `voice: { engine: 'browser' \| 'provider', language, provider: 'openai' \| 'azure' \| 'gemini', model }` (`normalizeVoiceSettings`): `model` is the transcription model, or for Azure the name of a Whisper deployment (separate from the chat deployments). Settings saves the whole object, so any new writer must keep `voice` |
 | `demoVersions:<origin><pathname>` | `DemoVersion[]` |
 | `tokenUsage` | `TokenUsageRecord[]`: one per AI reply that reported usage (time, provider, model, input/output/reasoning/total tokens, page host and path), newest last, at most 1,000. Written by the service worker after every `AI_REQUEST`, including continuation and repair calls and failed requests that still reported usage; the Tokens tab reads it and follows `chrome.storage.onChanged`. Counts are the provider's own; no cost is computed |
 | `localStorage["revamp-panel-position"]` (host page) | floating panel x/y |
@@ -234,7 +237,7 @@ Chat and demo are per browser tab. The panel and the content script learn their 
 
 ## 5. Message reference
 
-**Panel/content script → service worker:** `PING`, `GET_SETTINGS`, `UPDATE_SETTINGS`, `AI_REQUEST`, `FETCH_MODELS`, `VALIDATE_API_KEY`, `CAPTURE_VISIBLE_TAB`, `INJECT_CONTENT_SCRIPT`, `GET_TAB_ID` (reply `{ success, data: tabId }`; `success: false` when the sender has no tab).
+**Panel/content script → service worker:** `PING`, `GET_SETTINGS`, `UPDATE_SETTINGS`, `AI_REQUEST`, `FETCH_MODELS`, `VALIDATE_API_KEY`, `CAPTURE_VISIBLE_TAB`, `INJECT_CONTENT_SCRIPT`, `GET_TAB_ID` (reply `{ success, data: tabId }`; `success: false` when the sender has no tab), `TRANSCRIBE_AUDIO` (payload `{ audioBase64, mimeType: 'audio/wav' }`, reply `{ data: { text } }`; the provider and model come from `settings.voice`, not from the request; audio is not stored and not counted in `tokenUsage`).
 
 **Panel → content script** (via `chrome.tabs.sendMessage`):
 
@@ -246,6 +249,8 @@ Chat and demo are per browser tab. The panel and the content script learn their 
 | Demo | `DEMO_STATE`, `DEMO_SET_ENABLED`, `DEMO_SET_NAME`, `DEMO_REVERT`, `DEMO_RESET`, `DEMO_EXPORT`, `DEMO_IMPORT` |
 | Notes | `ANNOTATION_ADD`, `ANNOTATION_UPDATE`, `ANNOTATION_DELETE`, `ANNOTATION_VISIBLE`, `ANNOTATION_NOTES_CONTEXT` |
 | Presentation and output | `PRESENTATION_SET`, `SCREENSHOT`, `HANDOFF_CAPTURE`, `EXPORT_SNAPSHOT`, `GET_PAGE_HTML`, `GET_SUBTREE_SNAPSHOT` |
+
+**Dictation in the note popover.** The page cannot use the microphone (its origin is the site's), so the panel does the listening: content script → panel `VOICE_NOTE_TOGGLE` / `VOICE_NOTE_CANCEL` (`chrome.runtime.sendMessage`, no reply; the service worker deliberately does not answer them), panel → content script `VOICE_NOTE_EVENT` (payload `NoteDictationEvent`: `{ kind: 'state', state, error? }` or `{ kind: 'text', text, final }`). Extension messages are used instead of `postMessage` to the iframe, which a hostile page could also send. The microphone button exists only while the panel is open. The panel iframe carries `allow="microphone"`.
 
 **Content script → panel:** `ELEMENT_SELECTED`, `INSPECTOR_STATE_CHANGED` (`isActive`; keeps the inspector toggles in Editor and AI Chat in step) (broadcast with `chrome.runtime.sendMessage`).
 

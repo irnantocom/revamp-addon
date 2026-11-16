@@ -5,6 +5,7 @@ import AIChatBox from './components/AIChatBox';
 import Settings from './components/Settings';
 import DemoPanel from './components/DemoPanel';
 import TokenUsagePanel from './components/TokenUsagePanel';
+import NoteDictationBridge from './components/NoteDictationBridge';
 import { InspectedElement } from '../types/inspector';
 import { purgeOrphanAttachmentDatabases } from '../utils/attachment-store';
 import { useInspector } from './use-inspector';
@@ -59,6 +60,7 @@ const App: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full bg-gray-50">
+      <NoteDictationBridge />
       {/* Header */}
       <header className="bg-blue-600 text-white px-4 py-3">
         <h1 className="text-lg font-bold">Revamp</h1>

@@ -22,6 +22,10 @@ import { buildRequestMessages } from '../../utils/chat-content';
 import { AttachmentMeta } from '../../types/attachments';
 import { ensureContentScript } from '../tab-messaging';
 import { InspectorControl } from '../use-inspector';
+import { useDictation } from '../use-dictation';
+import { joinDictation } from '../dictation';
+import { DictationButton, DictationNotice } from './DictationButton';
+import AttachMenu, { type AttachMenuItem } from './AttachMenu';
 
 /** The model answered, but with nothing to parse: not an API-key problem, and worth retrying */
 class EmptyReplyError extends Error {}
@@ -85,6 +89,29 @@ const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initi
   const [messagesLoaded, setMessagesLoaded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Dictation fills the box but never sends: the text is checked, then sent by hand
+  const dictationBase = useRef('');
+  const dictation = useDictation((text) => setInput(joinDictation(dictationBase.current, text)));
+  // Add an entry here for each new way to bring content into the chat
+  const attachMenuItems: AttachMenuItem[] = [
+    {
+      id: 'upload',
+      label: 'Add photos & files',
+      description: 'Upload from computer',
+      icon: (
+        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9" />
+        </svg>
+      ),
+      onSelect: () => fileInputRef.current?.click(),
+    },
+  ];
+  // Typing or sending while the microphone is open would race with the incoming text
+  const dictating = dictation.state === 'listening' || dictation.state === 'transcribing';
+  const toggleDictation = () => {
+    if (dictation.state === 'idle' || dictation.state === 'error') dictationBase.current = input;
+    dictation.toggle();
+  };
   const [draggingFiles, setDraggingFiles] = useState(false);
   // Chat and files belong to this browser tab; undefined until resolved, and stays undefined if it cannot be
   const [tabId, setTabId] = useState<number | undefined>(undefined);
@@ -280,7 +307,7 @@ const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initi
     const draftAttachments = attachments.ready;
     const draftText = input;
     const text = input.trim();
-    if ((!text && draftAttachments.length === 0) || isLoading || attachments.busy) return;
+    if ((!text && draftAttachments.length === 0) || isLoading || attachments.busy || dictating) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -1125,17 +1152,7 @@ const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initi
             if (files.length > 0) void attachments.addFiles(files);
           }}
         />
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isLoading}
-            title="Attach files: images, PDF, video or documents"
-            aria-label="Attach files"
-            className="self-end rounded border border-gray-300 px-2 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            📎
-          </button>
+        <div className="rounded-2xl border border-gray-300 bg-white shadow-sm focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500">
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -1157,18 +1174,31 @@ const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initi
                 ? `Ask about ${selectedElement.tagName}...`
                 : 'Ask about page styling, layout, or select an element...'
             }
-            className="flex-1 text-sm border border-gray-300 rounded px-3 py-2 resize-none"
+            className="block w-full resize-none rounded-t-2xl border-0 bg-transparent px-4 pt-3 pb-1 text-sm text-gray-900 placeholder-gray-400 focus:outline-none"
             rows={3}
+            readOnly={dictating}
             disabled={isLoading}
           />
-          <button
-            onClick={handleSend}
-            disabled={isLoading || attachments.busy || (!input.trim() && attachments.ready.length === 0)}
-            className="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed self-end"
-          >
-            Send
-          </button>
+          <div className="flex items-center justify-between px-2 pb-2">
+            <AttachMenu items={attachMenuItems} disabled={isLoading} />
+            <div className="flex items-center gap-1">
+              <DictationButton dictation={{ ...dictation, toggle: toggleDictation }} disabled={isLoading} />
+              <button
+                type="button"
+                onClick={handleSend}
+                disabled={isLoading || attachments.busy || dictating || (!input.trim() && attachments.ready.length === 0)}
+                title="Send message"
+                aria-label="Send message"
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-200"
+              >
+                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 19V5M5 12l7-7 7 7" />
+                </svg>
+              </button>
+            </div>
+          </div>
         </div>
+        <DictationNotice dictation={dictation} />
         <div className="text-xs text-gray-500 mt-1">
           Press Enter to send, Shift+Enter for new line
         </div>

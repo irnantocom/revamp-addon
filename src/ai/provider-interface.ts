@@ -37,6 +37,22 @@ export interface AIResponse {
   };
 }
 
+/** One recorded clip to turn into text (16 kHz mono WAV, base64) */
+export interface TranscribeRequest {
+  audioBase64: string;
+  mimeType: string;
+  /** Model id, or the Azure transcription deployment name */
+  model: string;
+  /** ISO 639-1 hint such as "id"; omit to let the provider detect the language */
+  language?: string;
+}
+
+export interface TranscribeResponse {
+  success: boolean;
+  text?: string;
+  error?: string;
+}
+
 export interface AIProviderConfig {
   apiKey: string;
   baseURL?: string;
@@ -62,6 +78,11 @@ export interface IAIProvider {
       stream?: boolean;
     }
   ): Promise<AIResponse>;
+
+  /**
+   * Speech to text. Optional: only providers with an audio endpoint implement it
+   */
+  transcribeAudio?(request: TranscribeRequest): Promise<TranscribeResponse>;
 
   /**
    * Validate API key
