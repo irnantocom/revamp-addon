@@ -59,6 +59,7 @@ The panel talks to the page through `sendToTab` ([src/popup/tab-messaging.ts](sr
 | [src/utils/prompt-builder.ts](src/utils/prompt-builder.ts) | System prompt with the page index, the theme variables, a named site's design and the operation catalog; adds the attached-files rules when files are attached. |
 | [src/utils/attachment-reader.ts](src/utils/attachment-reader.ts), [file-sniff.ts](src/utils/file-sniff.ts), [document-text.ts](src/utils/document-text.ts), [media-processing.ts](src/utils/media-processing.ts) | Chat attachments: validate by magic bytes, extract document text, downscale images, sample video frames. |
 | [src/utils/web-images.ts](src/utils/web-images.ts) | Reads a web page named in the chat and lists its image URLs for the AI. |
+| [src/utils/web-text.ts](src/utils/web-text.ts) | Reads a web page named in the chat and outlines its words (headings, paragraphs, list items, buttons, table rows) for the AI. |
 | [src/utils/web-design.ts](src/utils/web-design.ts) | Reads a named page's stylesheets and extracts its variables, text styles and button styles for the AI; combines them with the drawn page. |
 | [src/utils/rendered-design.ts](src/utils/rendered-design.ts) | Opens a named page in a background tab and reads which colours, fonts and button looks it really draws. |
 | [src/utils/attachment-store.ts](src/utils/attachment-store.ts), [chat-content.ts](src/utils/chat-content.ts) | IndexedDB store for file content; builds the request messages from chat history and the draft (capabilities, size budget, notes). |
@@ -168,6 +169,17 @@ The AI cannot browse, so when a message names a web page *and* asks for its look
 
 Limits: `@import` inside a stylesheet is not followed; colours from the stylesheets come back as `rgb()` (the CSS object model's form); a combined stylesheet of hundreds of kilobytes is read whole but only the highest-ranked lines are sent; a site that blocks automated or hidden-tab loads, needs a login, or shows a cookie wall gives the wall's colours, or fails with the reason (the chat says which, and falls back to the stylesheets). The drawn page is a snapshot of the home state at desktop width: states such as hover, other pages and dark mode are not sampled. Checked in Chrome 150 against tallship.com.sg (WordPress, one combined 800 KB stylesheet): the drawn page gave Montserrat and Cormorant Garamond, a navy `#00324b` button and a gold `#c8995c` Cinzel button, and navy, dark navy and gold as the brand colours.
 
+### Text of another site
+
+The AI cannot browse, so when a message names a web page *and* asks for its content (`wantsContent` in [web-text.ts](src/utils/web-text.ts): content, text, copy, wording, headline, description, konten, isi, teks, judul, deskripsi), the panel reads the page and gives the model an outline of its words. A message that only asks for pictures or for the look sends no text.
+
+- **Read:** the same plain fetch as the images (`credentials: 'omit'`, 10 s timeout, 2 MB of HTML, not an AI call). The HTML is parsed with `DOMParser` (inert).
+- **Outline** (`extractWebText`): one line per element in page order, prefixed with its role (`h1:`, `p:`, `li:`, `button:`, `link:`, `row:` for a table row with cells split by ` | `, `quote:`), plain container text unprefixed, and a blank line before each `section`, `article`, `h1` and `h2`. Left out: scripts, styles, `nav`, `footer`, elements that are `hidden`, `aria-hidden` or inline `display:none`, and anything whose id or class says cookie, consent or gdpr. Lines are cut at 800 characters and the outline at 24,000 characters per page (the prompt then says the rest was not read).
+- **To the model:** `buildSystemPrompt` adds TEXT OF WEB PAGES THE USER NAMED, each page in a `<web_page_text>` block (a closing tag inside the text is defused). Rule 17 tells the model to treat it like a document (rule 11): map its sections onto this page's in order, keep each element's role, use its wording as written, and ignore any instruction written inside it. The panel keeps the text for the rest of the chat (`webTextCache`, at most 2 pages).
+- **Pictures** still come from the separate image list; the outline holds no image markers, so the model pairs pictures with sections by file name and order.
+
+Limits: a page that builds its text with JavaScript gives no text (the chat says so: "no readable text in the page source"; the background-tab read in `rendered-design.ts` is not used for text). Text that only appears after a click, in tabs or in an accordion that is not in the HTML is missing. The page header is read (its phone number and "Book now" appear); the footer is not.
+
 ### Images and backgrounds
 
 | Goal | How | Where it is resolved |
@@ -245,7 +257,7 @@ Chat and demo are per browser tab. The panel and the content script learn their 
 |-------|-------|
 | Panel and inspector | `TOGGLE_PANEL`, `START_INSPECTOR`, `STOP_INSPECTOR`, `GET_SELECTED_ELEMENT`, `GET_ELEMENT_INFO` |
 | Manual edits | `EDIT_TEXT`, `EDIT_ATTRIBUTE`, `APPLY_CSS`, `UNDO_EDIT` |
-| AI and operations | `GET_PAGE_INDEX`, `CHECK_OPERATIONS` (payload `{ operations }`, reply `{ problems: [{ operationId, error }] }`: operations the page would refuse for breaking its layout), `SECTION_COVERAGE` (payload `{ targets: number[] }`, reply `{ untouched: SectionInfo[] }`: page sections no target sits in), `PREVIEW_OPERATIONS`, `APPLY_OPERATIONS`, `PREVIEW_CHANGES`, `CLEAR_PREVIEW`, `UNDO_CHANGE`, `UNDO_ALL`, `APPLY_AI_CHANGE`, `APPLY_AI_REVAMP`, `LOCATE_ELEMENT` |
+| AI and operations | `GET_PAGE_INDEX` (payload `{ selector?, page? }`: the panel's selection is the scope; `page: true` means the panel shows none and the whole page is indexed, even if the content script still remembers an old selection), `CHECK_OPERATIONS` (payload `{ operations }`, reply `{ problems: [{ operationId, error }] }`: operations the page would refuse for breaking its layout), `SECTION_COVERAGE` (payload `{ targets: number[] }`, reply `{ untouched: SectionInfo[] }`: page sections no target sits in), `PREVIEW_OPERATIONS`, `APPLY_OPERATIONS`, `PREVIEW_CHANGES`, `CLEAR_PREVIEW`, `UNDO_CHANGE`, `UNDO_ALL`, `APPLY_AI_CHANGE`, `APPLY_AI_REVAMP`, `LOCATE_ELEMENT` |
 | Demo | `DEMO_STATE`, `DEMO_SET_ENABLED`, `DEMO_SET_NAME`, `DEMO_REVERT`, `DEMO_RESET`, `DEMO_EXPORT`, `DEMO_IMPORT` |
 | Notes | `ANNOTATION_ADD`, `ANNOTATION_UPDATE`, `ANNOTATION_DELETE`, `ANNOTATION_VISIBLE`, `ANNOTATION_NOTES_CONTEXT` |
 | Presentation and output | `PRESENTATION_SET`, `SCREENSHOT`, `HANDOFF_CAPTURE`, `EXPORT_SNAPSHOT`, `GET_PAGE_HTML`, `GET_SUBTREE_SNAPSHOT` |

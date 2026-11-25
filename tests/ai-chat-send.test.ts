@@ -188,6 +188,17 @@ describe('AIChatBox: replacing page content from a document', () => {
 
   const hideButton = () => Array.from(container.querySelectorAll('button')).find((b) => /^Hide (it|them)$/.test(b.textContent || ''));
 
+  it('asks for the whole page when the panel shows no selection, so a stale selection in the page does not shrink the index', async () => {
+    mockPage(pageIndex());
+    aiResponse = { success: true, data: { content: operations, usage: {} } };
+    await typeText('change the heading');
+    await send();
+
+    const request = pageMessages.find((m) => m.type === 'GET_PAGE_INDEX');
+    expect(request.page).toBe(true);
+    expect(request.selector).toBeUndefined();
+  });
+
   it('offers to hide the sections the document left out, and hides them on request', async () => {
     mockPage(pageIndex(), [{ id: 7, label: 'Team' }, { id: 8, label: 'Blog' }]);
     aiResponse = { success: true, data: { content: operations, usage: {} } };

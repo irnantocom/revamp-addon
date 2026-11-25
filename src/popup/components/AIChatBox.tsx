@@ -8,6 +8,7 @@ import { resolveAttachmentSources } from '../../utils/attachment-refs';
 import { shrinkDataUrl } from '../../utils/image-shrink';
 import { countImageSlots, gatherWebImages, keywordsFrom, pageUrlsFrom, WebImageSource } from '../../utils/web-images';
 import { gatherWebDesign, wantsDesign, type WebDesign } from '../../utils/web-design';
+import { fetchWebText, wantsContent, type WebText } from '../../utils/web-text';
 import { readRenderedDesign } from '../../utils/rendered-design';
 import { Ask, completeReply, describeEmptyReply, ReplyInfo } from '../../utils/reply-continuation';
 import { repairOperations } from '../../utils/operation-repair';
@@ -85,6 +86,7 @@ const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initi
   // Image lists read from pages the user named; kept so later messages can still use them
   const webImageCache = useRef(new Map<string, WebImageSource>());
   const webDesignCache = useRef(new Map<string, WebDesign>());
+  const webTextCache = useRef(new Map<string, WebText>());
   // Sections a document rewrite would leave as they were, per assistant message. Not persisted: ids die with the page.
   const [untouched, setUntouched] = useState<Record<string, Array<{ id: number; label: string }>>>({});
   const [loadingModels, setLoadingModels] = useState(false);
@@ -348,6 +350,7 @@ const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initi
         const indexResponse = await chrome.tabs.sendMessage(tab.id, {
           type: 'GET_PAGE_INDEX',
           selector: selectedElement?.selector?.selector || undefined,
+          page: !selectedElement,
         });
 
         if (indexResponse.success) {
@@ -435,8 +438,34 @@ const AIChatBox: React.FC<Props> = ({ inspector, selectedElement, onClear, initi
           if (cached && !webDesigns.includes(cached) && webDesigns.length < 2) webDesigns.push(cached);
         }
       }
+      // The words of a named page are read only when the message asks for its content, so a request for pictures or looks sends none
+      const webTexts: WebText[] = [];
+      if (wantsContent(text)) {
+        for (const page of pageUrlsFrom(text)) {
+          const cached = webTextCache.current.get(page);
+          const result = cached ? { ok: true as const, source: cached } : await fetchWebText(page);
+          if (result.ok) {
+            webTextCache.current.set(page, result.source);
+            webTexts.push(result.source);
+            if (!cached) {
+              const { lines, truncated } = result.source;
+              const cut = truncated ? ' (a long page: the rest was not read)' : '';
+              webNotes.push(`Read the text of ${new URL(page).host} for the AI to use: ${lines.filter(Boolean).length} lines${cut}.`);
+            }
+          } else {
+            webNotes.push(`Could not read the text of ${page}: ${result.error}.`);
+          }
+        }
+      }
+      for (const entry of messages) {
+        if (entry.role !== 'user') continue;
+        for (const page of pageUrlsFrom(entry.content)) {
+          const cached = webTextCache.current.get(page);
+          if (cached && !webTexts.includes(cached) && webTexts.length < 2) webTexts.push(cached);
+        }
+      }
       const built = await buildRequestMessages({
-        systemPrompt: buildSystemPrompt(pageIndexData, { hasAttachments, images, webImages, webDesigns }),
+        systemPrompt: buildSystemPrompt(pageIndexData, { hasAttachments, images, webImages, webDesigns, webTexts }),
         history: messages.map((m) => ({ role: m.role, text: m.content, attachments: m.attachments })),
         draft: { text, attachments: draftAttachments },
         load: (id) => attachmentStore.get(id),

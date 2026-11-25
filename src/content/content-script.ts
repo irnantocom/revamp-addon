@@ -224,7 +224,7 @@ class RevampInspector {
           break;
 
         case 'GET_PAGE_INDEX':
-          sendResponse(this.getPageIndex(message.selector));
+          sendResponse(this.getPageIndex(message.selector, message.page === true));
           break;
 
         case 'SECTION_COVERAGE':
@@ -911,13 +911,15 @@ class RevampInspector {
   }
 
   /**
-   * Build the numbered page index the AI uses to reference elements
+   * Build the numbered page index the AI uses to reference elements.
+   * `wholePage` is sent by the panel when it shows no selection: the panel's selection is the one that
+   * counts, because "clear" there does not reach `selectedElement` here, and a stale one would shrink the index to it.
    */
-  getPageIndex(selector?: string): MessageResponse {
+  getPageIndex(selector?: string, wholePage = false): MessageResponse {
     try {
       let root: Element | null = null;
       if (selector) root = SelectorGenerator.query(selector).elements[0] || null;
-      if (!root) root = this.selectedElement || document.body;
+      if (!root) root = (wholePage ? null : this.selectedElement) || document.body;
       if (!root) return { success: false, error: 'No element to index' };
 
       const { text, count, truncated } = pageIndex.build(root);
